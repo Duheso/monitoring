@@ -1,0 +1,4 @@
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+psutil==5.9.6
+aiofiles==23.1.0
