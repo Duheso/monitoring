@@ -134,40 +134,36 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
       icon={<BookOpen size={14} />}
       extra={extraActions}
     >
-      {/* Service selector */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
-        <select value={selected} onChange={e => setSelected(e.target.value)}
-          style={{ flex: 1, fontSize: 12, padding: '4px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text1)', outline: 'none' }}>
-          <option value="">— select service —</option>
-          {services.map(svc => (
-            <option key={svc.name} value={svc.name}>
-              {svc.name} ({svc.sub_state ?? svc.status})
-            </option>
-          ))}
-        </select>
-        <button onClick={loadServices} title="Refresh service list"
-          style={{ padding: '4px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.04)', color: 'var(--muted)' }}>
-          ↻
-        </button>
-      </div>
+      <div className="journal-body">
+        {/* Service selector */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+          <select value={selected} onChange={e => setSelected(e.target.value)}
+            style={{ flex: 1, fontSize: 12, padding: '4px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text1)', outline: 'none' }}>
+            <option value="">— select service —</option>
+            {services.map(svc => (
+              <option key={svc.name} value={svc.name}>
+                {svc.name} ({svc.sub_state ?? svc.status})
+              </option>
+            ))}
+          </select>
+          <button onClick={loadServices} title="Refresh service list"
+            style={{ padding: '4px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.04)', color: 'var(--muted)' }}>
+            ↻
+          </button>
+        </div>
 
-      {/* Log area */}
-      <div
-        ref={bodyRef}
-        onScroll={e => {
-          // If user scrolled up manually, disable follow
-          const el = e.currentTarget
-          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-          if (!atBottom && follow) setFollow(false)
-          if (atBottom && !follow) setFollow(true)
-        }}
-        style={{
-          height: 260, overflowY: 'auto',
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 11, lineHeight: 1.6,
-          background: 'rgba(0,0,0,0.35)', borderRadius: 6, padding: '6px 8px',
-          border: '1px solid var(--border)',
-        }}
-      >
+        {/* Log area */}
+        <div
+          ref={bodyRef}
+          onScroll={e => {
+            // If user scrolled up manually, disable follow
+            const el = e.currentTarget
+            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+            if (!atBottom && follow) setFollow(false)
+            if (atBottom && !follow) setFollow(true)
+          }}
+          className="journal-log"
+        >
         {lines.length === 0 ? (
           <span style={{ color: 'var(--muted)' }}>
             {selected ? 'Connecting…' : 'Select a service above'}
@@ -179,12 +175,13 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
         )}
       </div>
 
-      {/* Status bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+        {/* Status bar */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
         <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
         <span style={{ color: paused ? '#f59e0b' : follow ? 'var(--accent)' : 'var(--muted)' }}>
           {paused ? '⏸ paused' : follow ? '⬇ following' : '↕ scrolled'}
         </span>
+      </div>
       </div>
     </CardWrapper>
   )
