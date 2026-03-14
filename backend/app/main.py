@@ -20,7 +20,12 @@ from typing import Optional
 import os
 from fastapi import Request
 from pydantic import BaseModel
+from dotenv import load_dotenv
 from .auth import create_access_token, verify_token, authenticate_pam
+
+# Load .env from project root
+_project_root = Path(__file__).resolve().parents[2]
+load_dotenv(_project_root / '.env')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('monitor')
@@ -79,22 +84,30 @@ def init_psutil():
 
 init_psutil()
 
-# ── Layout persistence ────────────────────────────────────────────────────────
-base_data_dir = Path(__file__).resolve().parents[2]
-try:
-    data_dir = base_data_dir / 'backend_data'
-    data_dir.mkdir(exist_ok=True)
-except PermissionError:
-    try:
-        data_dir = Path('/var/lib/dgx-monitor')
-        data_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        data_dir = Path('/tmp/dgx-monitor')
-        data_dir.mkdir(parents=True, exist_ok=True)
+# ── Runtime data directory ────────────────────────────────────────────────────
+# Resolved from DATA_DIR env var, then project ./backend_data, then system fallbacks
+def _resolve_data_dir() -> Path:
+    env_dir = os.getenv('DATA_DIR', '').strip()
+    if env_dir:
+        p = Path(env_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    candidates = [
+        _project_root / 'backend_data',
+        Path('/var/lib/dgx-monitor'),
+        Path('/tmp/dgx-monitor'),
+    ]
+    for p in candidates:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except PermissionError:
+            continue
+    raise RuntimeError('Cannot create a writable data directory')
 
-layouts_dir = data_dir / 'layouts'
+data_dir      = _resolve_data_dir()
+layouts_dir   = data_dir / 'layouts'
 layouts_dir.mkdir(exist_ok=True)
-
 services_file = data_dir / 'services.json'
 
 # ── In-memory metrics history (circular buffer ~5 min @ 1 Hz) ─────────────────

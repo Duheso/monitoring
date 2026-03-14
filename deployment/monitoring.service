@@ -8,7 +8,9 @@ User=accadmin
 Group=shadow
 SupplementaryGroups=shadow adm docker ollama devgroup
 WorkingDirectory=/home/accadmin/workspace/monitoring
-ExecStart=/usr/bin/python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 3001
+EnvironmentFile=-/home/accadmin/workspace/monitoring/.env
+Environment="PATH=/home/accadmin/workspace/zero/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/accadmin/workspace/zero/venv/bin/python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 3001
 Restart=on-failure
 RestartSec=5
 
