@@ -63,7 +63,6 @@ export default function ProcessesCard({ data }) {
     return col
   })
 
-  return (
   const headerExtra = (
     <div className="processes-header-filter">
       <span className="processes-filter-label">Filter by user</span>
