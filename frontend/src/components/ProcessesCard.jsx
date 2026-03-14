@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo, useState } from 'react'
 import { List } from 'lucide-react'
 import CardWrapper from './CardWrapper'
 import ResizableTable from './ResizableTable'
@@ -28,8 +28,26 @@ function cpuClass(v) { return v >= 80 ? 'danger-val' : v >= 40 ? 'warn-val' : 'a
 
 export default function ProcessesCard({ data }) {
   const { settings, toggleVisible, setWidth } = useColumnSettings('processes', COLS)
+  const [userFilter, setUserFilter] = useState('root')
 
-  const rows = (data ?? []).map(p => ({
+  const userOptions = useMemo(() => {
+    const usernames = new Set()
+    ;(data ?? []).forEach(proc => {
+      if (proc.username) usernames.add(proc.username)
+    })
+    const sorted = Array.from(usernames).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    if (!sorted.includes('root')) sorted.unshift('root')
+    if (sorted.length === 0) return ['all', 'root']
+    return ['all', ...sorted]
+  }, [data])
+
+  const normalizedFilter = userFilter === 'all' ? null : userFilter
+  const filteredProcesses = (data ?? []).filter(proc => {
+    if (!normalizedFilter) return true
+    return proc.username === normalizedFilter
+  })
+
+  const rows = filteredProcesses.map(p => ({
     ...p,
     cpu_percent:    p.cpu_percent?.toFixed(1) ?? '0.0',
     memory_percent: p.memory_percent?.toFixed(2) ?? '0.00',
@@ -46,7 +64,30 @@ export default function ProcessesCard({ data }) {
   })
 
   return (
-    <CardWrapper title="Processes" icon={<List size={14} />} columns={COLS} colSettings={settings} onToggleCol={toggleVisible}>
+  const headerExtra = (
+    <div className="processes-header-filter">
+      <span className="processes-filter-label">Filter by user</span>
+      <select
+        className="processes-filter-select"
+        value={userFilter}
+        onChange={e => setUserFilter(e.target.value)}
+      >
+        {userOptions.map(user => (
+          <option key={user} value={user}>{user === 'all' ? 'All users' : user}</option>
+        ))}
+      </select>
+    </div>
+  )
+
+  return (
+    <CardWrapper
+      title="Processes"
+      icon={<List size={14} />}
+      columns={COLS}
+      colSettings={settings}
+      onToggleCol={toggleVisible}
+      extra={headerExtra}
+    >
       <ResizableTable
         columns={enrichedCols}
         data={rows}

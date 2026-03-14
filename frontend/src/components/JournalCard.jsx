@@ -15,6 +15,7 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
   const [lines, setLines]         = useState([])
   const [follow, setFollow]       = useState(true)
   const [paused, setPaused]       = useState(false)
+  const [filter, setFilter]       = useState(() => localStorage.getItem(`dgx_journal_filter_${instanceId}`) || '')
 
   // Use refs to avoid stale closures in SSE handler
   const pausedRef  = useRef(paused)
@@ -42,6 +43,7 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
   // Persist selection & maxLines
   useEffect(() => { localStorage.setItem(`dgx_journal_svc_${instanceId}`, selected) }, [selected, instanceId])
   useEffect(() => { localStorage.setItem(`dgx_journal_max_${instanceId}`, String(maxLines)) }, [maxLines, instanceId])
+  useEffect(() => { localStorage.setItem(`dgx_journal_filter_${instanceId}`, filter) }, [filter, instanceId])
 
   // ── SSE subscription — restarts when service or maxLines changes ──────────
   useEffect(() => {
@@ -96,6 +98,28 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
     color: active ? activeColor : 'var(--muted)',
   })
 
+  const escapeRegExp = (value) => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
+
+  const filterPattern = filter ? escapeRegExp(filter) : ''
+  const highlightMatches = (text) => {
+    if (!filterPattern) return text
+    const regex = new RegExp(filterPattern, 'gi')
+    const nodes = []
+    let lastIndex = 0
+    let match
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index))
+      nodes.push(<span key={`${text}-${match.index}`} className="journal-highlight">{match[0]}</span>)
+      lastIndex = match.index + match[0].length
+    }
+    if (lastIndex < text.length) nodes.push(text.slice(lastIndex))
+    return nodes.length ? nodes : text
+  }
+
+  const filteredLines = filterPattern
+    ? lines.filter(l => new RegExp(filterPattern, 'i').test(l))
+    : lines
+
   const extraActions = (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
       {/* Lines selector */}
@@ -135,28 +159,35 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
       extra={extraActions}
     >
       <div className="journal-body">
-        {/* Service selector */}
-        <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
-          <select value={selected} onChange={e => setSelected(e.target.value)}
-            style={{ flex: 1, fontSize: 12, padding: '4px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text1)', outline: 'none' }}>
-            <option value="">— select service —</option>
-            {services.map(svc => (
-              <option key={svc.name} value={svc.name}>
-                {svc.name} ({svc.sub_state ?? svc.status})
-              </option>
-            ))}
-          </select>
-          <button onClick={loadServices} title="Refresh service list"
-            style={{ padding: '4px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.04)', color: 'var(--muted)' }}>
-            ↻
-          </button>
+        <div className="journal-control-row">
+          <div className="journal-service-select">
+            <select className="journal-service-select-input" value={selected} onChange={e => setSelected(e.target.value)}>
+              <option value="">— select service —</option>
+              {services.map(svc => (
+                <option key={svc.name} value={svc.name}>
+                  {svc.name} ({svc.sub_state ?? svc.status})
+                </option>
+              ))}
+            </select>
+            <button className="journal-refresh-btn" onClick={loadServices} title="Refresh service list">↻</button>
+          </div>
+          <div className="journal-filter-group">
+            <input
+              className="journal-filter-input"
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              placeholder="Filter logs (e.g. service, IP, status)"
+            />
+            {filter && (
+              <button className="journal-filter-clear" onClick={() => setFilter('')}>✕</button>
+            )}
+          </div>
         </div>
 
         {/* Log area */}
         <div
           ref={bodyRef}
           onScroll={e => {
-            // If user scrolled up manually, disable follow
             const el = e.currentTarget
             const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
             if (!atBottom && follow) setFollow(false)
@@ -164,24 +195,42 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
           }}
           className="journal-log"
         >
-        {lines.length === 0 ? (
-          <span style={{ color: 'var(--muted)' }}>
-            {selected ? 'Connecting…' : 'Select a service above'}
-          </span>
-        ) : (
-          lines.map((l, i) => (
-            <div key={i} style={{ color: levelColor(l), wordBreak: 'break-all', userSelect: 'text' }}>{l}</div>
-          ))
-        )}
-      </div>
+          {filteredLines.length === 0 ? (
+            <span style={{ color: 'var(--muted)' }}>
+              {selected ? 'Awaiting logs…' : 'Select a service above'}
+            </span>
+          ) : (
+            filteredLines.map((l, i) => {
+              const logMatch = l.match(/^(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\.\d+)\s+(\S+)\s+(\S+)\[(\d+)\]:\s*([A-Z]+):\s*(.*)$/)
+              if (logMatch) {
+                const [, ts, host, svc, pid, level, msg] = logMatch
+                return (
+                  <div key={`${i}-${svc}`} className="journal-log-line">
+                    <span className="journal-log-ts">{highlightMatches(ts)}</span>
+                    <span className="journal-log-host">{highlightMatches(host)}</span>
+                    <span className="journal-service">{highlightMatches(svc)}</span>
+                    <span className="journal-pid">[{highlightMatches(pid)}]</span>
+                    <span className="journal-level" style={{ color: levelColor(level) }}>{highlightMatches(level)}</span>
+                    <span className="journal-msg">{highlightMatches(msg)}</span>
+                  </div>
+                )
+              }
+              return (
+                <div key={i} className="journal-log-line">
+                  <span className="journal-msg">{highlightMatches(l)}</span>
+                </div>
+              )
+            })
+          )}
+        </div>
 
         {/* Status bar */}
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
-        <span>{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
-        <span style={{ color: paused ? '#f59e0b' : follow ? 'var(--accent)' : 'var(--muted)' }}>
-          {paused ? '⏸ paused' : follow ? '⬇ following' : '↕ scrolled'}
-        </span>
-      </div>
+          <span>{filteredLines.length} line{filteredLines.length !== 1 ? 's' : ''}</span>
+          <span style={{ color: paused ? '#f59e0b' : follow ? 'var(--accent)' : 'var(--muted)' }}>
+            {paused ? '⏸ paused' : follow ? '⬇ following' : '↕ scrolled'}
+          </span>
+        </div>
       </div>
     </CardWrapper>
   )
