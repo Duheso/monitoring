@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Activity, Plus, Trash2, RefreshCw, Play, Square, RotateCcw } from 'lucide-react'
 import CardWrapper from './CardWrapper'
+import { authFetch } from '../lib/api'
 
 const STATUS_COLOR = {
   active:       '#22c55e',
@@ -29,7 +30,7 @@ export default function ServicesCard() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/services')
+      const r = await authFetch('/api/services')
       const j = await r.json()
       setServices(j.services ?? [])
     } catch (e) {
@@ -49,7 +50,7 @@ export default function ServicesCard() {
     const name = newSvc.trim()
     if (!name) return
     try {
-      await fetch('/api/services', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) })
+      await authFetch('/api/services', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) })
       setNewSvc('')
       await refresh()
     } catch (e) {
@@ -59,7 +60,7 @@ export default function ServicesCard() {
 
   const removeService = async (name) => {
     try {
-      await fetch(`/api/services/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await authFetch(`/api/services/${encodeURIComponent(name)}`, { method: 'DELETE' })
       await refresh()
     } catch (e) {
       setError('Failed to remove service')
@@ -69,7 +70,7 @@ export default function ServicesCard() {
   const doAction = async (name, action) => {
     setActionPending(p => ({ ...p, [name]: action }))
     try {
-      await fetch(`/api/services/${encodeURIComponent(name)}/action`, {
+      await authFetch(`/api/services/${encodeURIComponent(name)}/action`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),

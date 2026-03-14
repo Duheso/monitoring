@@ -5,7 +5,11 @@ const BASE_DELAY = 1000
 const MAX_DELAY  = 30000
 const HISTORY_MAX = 300
 
-export function useWebSocket(path = '/ws') {
+/**
+ * @param {string} url  Full ws:// URL (may include ?token=...) OR a path like '/ws'.
+ *                       Pass null/'' to stay disconnected.
+ */
+export function useWebSocket(url = '/ws') {
   const [status, setStatus]   = useState(STATES.CONNECTING)
   const [metrics, setMetrics] = useState(null)
   const historyRef = useRef([])
@@ -15,11 +19,12 @@ export function useWebSocket(path = '/ws') {
   const unmounted  = useRef(false)
 
   const connect = useCallback(() => {
-    if (unmounted.current) return
+    if (unmounted.current || !url) return
     setStatus(STATES.CONNECTING)
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url   = `${proto}://${location.host}${path}`
-    const ws    = new WebSocket(url)
+    // Accept full ws:// URL or a bare path
+    const fullUrl = url.startsWith('ws') ? url
+      : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${url}`
+    const ws = new WebSocket(fullUrl)
     wsRef.current = ws
 
     ws.onopen = () => {
@@ -37,8 +42,14 @@ export function useWebSocket(path = '/ws') {
       } catch (_) {}
     }
 
-    ws.onclose  = () => {
+    ws.onclose = (ev) => {
       if (unmounted.current) return
+      // Code 4001 = auth rejected — do not reconnect
+      if (ev.code === 4001) {
+        setStatus(STATES.DISCONNECTED)
+        window.dispatchEvent(new CustomEvent('dgx:auth-expired'))
+        return
+      }
       setStatus(STATES.DISCONNECTED)
       timerRef.current = setTimeout(() => {
         delayRef.current = Math.min(delayRef.current * 2, MAX_DELAY)
@@ -46,12 +57,12 @@ export function useWebSocket(path = '/ws') {
       }, delayRef.current)
     }
 
-    ws.onerror = () => {
-      ws.close()
-    }
-  }, [path])
+    ws.onerror = () => { ws.close() }
+  }, [url])
 
   useEffect(() => {
+    unmounted.current = false
+    delayRef.current  = BASE_DELAY
     connect()
     return () => {
       unmounted.current = true

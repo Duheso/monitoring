@@ -1,10 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { BookOpen, X } from 'lucide-react'
 import CardWrapper from './CardWrapper'
-
-const API = window.location.hostname === 'localhost'
-  ? 'http://localhost:3001'
-  : `${window.location.protocol}//${window.location.host.replace(/:\d+$/, '')}:3001`
+import { authFetch, buildTokenUrl } from '../lib/api'
 
 const LINE_OPTS = [100, 200, 500, 1000]
 
@@ -28,8 +25,8 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
 
   // ── Service list — load once + refresh every 10 s ──────────────────────────
   const loadServices = useCallback(() => {
-    fetch(`${API}/api/services`)
-      .then(r => r.json())
+    authFetch('/api/services')
+      .then(r => r.ok ? r.json() : { services: [] })
       .then(d => setServices(d.services ?? []))
       .catch(() => {})
   }, [])
@@ -51,7 +48,7 @@ export default function JournalCard({ instanceId = 'default', onClose }) {
     if (!selected) return
     setLines([])
 
-    const url = `${API}/api/journal/${encodeURIComponent(selected)}?lines=${maxLines}&follow=true`
+    const url = buildTokenUrl(`/api/journal/${encodeURIComponent(selected)}?lines=${maxLines}&follow=true`)
     const es = new EventSource(url)
     evtRef.current = es
 

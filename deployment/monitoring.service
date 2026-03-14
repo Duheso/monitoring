@@ -4,12 +4,13 @@ After=network.target
 
 [Service]
 Type=simple
-User=www-data
-Group=www-data
+User=accadmin
+Group=shadow
+SupplementaryGroups=shadow adm docker ollama devgroup
 WorkingDirectory=/home/accadmin/workspace/monitoring
-Environment="PATH=/home/accadmin/workspace/monitoring/.venv/bin"
-ExecStart=/home/accadmin/workspace/monitoring/.venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port 3001
+ExecStart=/usr/bin/python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 3001
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

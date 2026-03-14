@@ -1,4 +1,6 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse, StreamingResponse
 import logging
@@ -14,14 +16,37 @@ import time
 import socket
 from collections import deque
 from pathlib import Path
+from typing import Optional
 import os
 from fastapi import Request
 from pydantic import BaseModel
+from .auth import create_access_token, verify_token, authenticate_pam
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('monitor')
 
 app = FastAPI(title='DGX Monitor', version='2.0.0')
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
+# ── Auth dependency ───────────────────────────────────────────────────────────
+_bearer = HTTPBearer(auto_error=False)
+
+async def get_current_user(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    token: Optional[str] = Query(default=None),
+) -> str:
+    raw = (creds.credentials if creds else None) or token or ''
+    user = verify_token(raw)
+    if not user:
+        raise HTTPException(status_code=401, detail='Invalid or expired token')
+    return user
 
 # ── Static files ───────────────────────────────────────────────────────────────
 static_dir = Path(__file__).resolve().parents[2] / 'frontend' / 'dist'
@@ -86,23 +111,42 @@ class LayoutPayload(BaseModel):
     layout: list
 
 
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
+# ── API: auth ─────────────────────────────────────────────────────────────────
+@app.post('/api/auth/login')
+def login(payload: LoginPayload):
+    if not authenticate_pam(payload.username, payload.password):
+        raise HTTPException(status_code=401, detail='Invalid username or password')
+    token = create_access_token(payload.username)
+    return {'access_token': token, 'token_type': 'bearer', 'username': payload.username}
+
+
+@app.get('/api/auth/me')
+def auth_me(current_user: str = Depends(get_current_user)):
+    return {'username': current_user}
+
+
 # ── API: layout ───────────────────────────────────────────────────────────────
 @app.get('/api/layout')
-def get_layout(user: str = 'default'):
-    p = layouts_dir / f"{user}.json"
+def get_layout(current_user: str = Depends(get_current_user)):
+    p = layouts_dir / f"{current_user}.json"
     if p.exists():
         try:
             return json.loads(p.read_text())
         except Exception:
-            return {'layout': None}
-    return {'layout': None}
+            return {'layout': None, 'instances': None}
+    return {'layout': None, 'instances': None}
 
 
 @app.post('/api/layout')
-async def post_layout(req: Request, user: str = 'default'):
+async def post_layout(req: Request, current_user: str = Depends(get_current_user)):
     try:
         body = await req.json()
-        p = layouts_dir / f"{user}.json"
+        p = layouts_dir / f"{current_user}.json"
         p.write_text(json.dumps(body))
         return {'ok': True}
     except Exception as e:
@@ -111,7 +155,7 @@ async def post_layout(req: Request, user: str = 'default'):
 
 # ── API: history ──────────────────────────────────────────────────────────────
 @app.get('/api/history')
-def get_history(points: int = 300):
+def get_history(points: int = 300, _u: str = Depends(get_current_user)):
     pts = min(points, HISTORY_MAX)
     data = list(metrics_history)[-pts:]
     return {'points': data}
@@ -162,13 +206,13 @@ def check_service_status(name: str) -> dict:
 
 # ── API: services ─────────────────────────────────────────────────────────────
 @app.get('/api/services')
-def get_services():
+def get_services(_u: str = Depends(get_current_user)):
     svcs = load_services()
     return {'services': [check_service_status(s) for s in svcs]}
 
 
 @app.post('/api/services')
-async def add_service(req: Request):
+async def add_service(req: Request, _u: str = Depends(get_current_user)):
     try:
         body = await req.json()
         name = body.get('name', '').strip()
@@ -184,7 +228,7 @@ async def add_service(req: Request):
 
 
 @app.delete('/api/services/{name}')
-def delete_service(name: str):
+def delete_service(name: str, _u: str = Depends(get_current_user)):
     svcs = load_services()
     svcs = [s for s in svcs if s != name]
     save_services(svcs)
@@ -192,7 +236,7 @@ def delete_service(name: str):
 
 
 @app.post('/api/services/{name}/action')
-async def service_action(name: str, req: Request):
+async def service_action(name: str, req: Request, _u: str = Depends(get_current_user)):
     try:
         body = await req.json()
         action = body.get('action', '')  # start | stop | restart
@@ -208,7 +252,8 @@ async def service_action(name: str, req: Request):
 
 # ── API: journal SSE ──────────────────────────────────────────────────────────
 @app.get('/api/journal/{service}')
-async def stream_journal(service: str, lines: int = 100, follow: bool = True):
+async def stream_journal(service: str, lines: int = 100, follow: bool = True,
+                         _u: str = Depends(get_current_user)):
     async def generate():
         cmd = ['journalctl', '-u', service, '-n', str(lines), '--no-pager', '-o', 'short-precise']
         if follow:
@@ -692,9 +737,13 @@ def collect_metrics() -> dict:
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
 @app.websocket('/ws')
-async def websocket_metrics(websocket: WebSocket):
+async def websocket_metrics(websocket: WebSocket, token: str = ''):
+    user = verify_token(token)
+    if not user:
+        await websocket.close(code=4001)
+        return
     await websocket.accept()
-    logger.info('WebSocket client connected: %s', websocket.client)
+    logger.info('WebSocket client connected: %s (%s)', websocket.client, user)
     try:
         await asyncio.sleep(0.15)
         while True:

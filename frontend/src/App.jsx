@@ -1,9 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import GridLayout from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import './styles.css'
 
+import { useAuth }      from './contexts/AuthContext'
+import { authFetch, buildWsUrl } from './lib/api'
+import { Activity, Loader2 } from 'lucide-react'
+import LoginPage    from './components/LoginPage'
 import { useWebSocket } from './hooks/useWebSocket'
 import Header         from './components/Header'
 import CPUCard        from './components/CPUCard'
@@ -84,24 +88,41 @@ function applyFont(name) {
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 5) }
 
-// ── App ───────────────────────────────────────────────────────────────────────
+// ── App shell — handles auth gating ──────────────────────────────────────────
 export default function App() {
-  const { status, metrics, history } = useWebSocket('/ws')
+  const { user, token, loading, login, logout } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="login-logo" style={{ marginBottom: 0 }}>
+          <Activity size={32} strokeWidth={1.5} />
+        </div>
+        <span className="logo-text">DGX Monitor</span>
+        <Loader2 size={20} className="spin" style={{ color: 'var(--accent)' }} />
+      </div>
+    )
+  }
+
+  if (!user) return <LoginPage onLogin={login} />
+
+  return <Dashboard authUser={user} token={token} logout={logout} />
+}
+
+// ── Dashboard — the actual monitoring view ────────────────────────────────────
+function Dashboard({ authUser, token, logout }) {
+  const wsUrl = buildWsUrl('/ws')
+  const { status, metrics, history } = useWebSocket(wsUrl)
 
   const [width, setWidth] = useState(window.innerWidth - 20)
   const [theme, setTheme] = useState(() => localStorage.getItem('dgx_theme') || 'midnight')
   const [font,  setFont]  = useState(() => localStorage.getItem('dgx_font')  || 'Inter')
-  const [user,  setUser]  = useState(() => localStorage.getItem('dgx_user')  || '1')
 
-  // Dynamic card instances
-  const [instances, setInstances] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('dgx_instances')) || DEFAULT_INSTANCES } catch { return DEFAULT_INSTANCES }
-  })
-
-  // Grid layout
-  const [layout, setLayout] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('dgx_layout')) || DEFAULT_LAYOUT } catch { return DEFAULT_LAYOUT }
-  })
+  // Per-user layout — loaded from server after auth
+  const layoutLoadedRef = useRef(false)
+  const saveTimerRef    = useRef(null)
+  const [instances, setInstances] = useState(DEFAULT_INSTANCES)
+  const [layout,    setLayout]    = useState(DEFAULT_LAYOUT)
 
   // Responsive width
   useEffect(() => {
@@ -112,27 +133,32 @@ export default function App() {
 
   useEffect(() => { applyTheme(theme); localStorage.setItem('dgx_theme', theme) }, [theme])
   useEffect(() => { applyFont(font);   localStorage.setItem('dgx_font',  font)  }, [font])
-  useEffect(() => { localStorage.setItem('dgx_user', user) }, [user])
-  useEffect(() => { localStorage.setItem('dgx_layout',    JSON.stringify(layout)) }, [layout])
-  useEffect(() => { localStorage.setItem('dgx_instances', JSON.stringify(instances)) }, [instances])
 
-  // Save layout to server
+  // ── Per-user layout: load from server once on mount ──────────────────────
   useEffect(() => {
-    const u = localStorage.getItem('dgx_user') || '1'
-    fetch(`/api/layout?user=${encodeURIComponent(u)}`)
-      .then(r => r.json())
-      .then(j => { if (j?.layout) setLayout(j.layout) })
-      .catch(() => {})
-  }, [])
+    layoutLoadedRef.current = false
+    authFetch('/api/layout')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        layoutLoadedRef.current = true
+        if (data?.instances?.length) setInstances(data.instances)
+        if (data?.layout?.length)    setLayout(data.layout)
+      })
+      .catch(() => { layoutLoadedRef.current = true })
+  }, [authUser])   // re-fetch if user somehow changes
 
+  // ── Per-user layout: save to server (debounced 1.5 s) ────────────────────
   useEffect(() => {
-    const u = localStorage.getItem('dgx_user') || user
-    fetch(`/api/layout?user=${encodeURIComponent(u)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ layout }),
-    }).catch(() => {})
-  }, [layout])
+    if (!layoutLoadedRef.current) return
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      authFetch('/api/layout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layout, instances }),
+      }).catch(() => {})
+    }, 1500)
+  }, [layout, instances, authUser])
 
   // ── Card management ─────────────────────────────────────────────────────────
   const addCard = useCallback((typeOrId) => {
@@ -205,7 +231,8 @@ export default function App() {
     fonts: FONTS,
     theme, setTheme,
     font, setFont,
-    user, setUser,
+    authUser,
+    logout,
     instances,
     gpus,
     onAddCard: addCard,

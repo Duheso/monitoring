@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { Palette, Type, User, LayoutGrid, Plus, Eye, EyeOff } from 'lucide-react'
+import { Palette, Type, User, LayoutGrid, Plus, Eye, EyeOff, LogOut } from 'lucide-react'
 
 const SINGLETON_CARDS = [
   { id: 'system',    label: 'System Info' },
@@ -13,7 +13,7 @@ const SINGLETON_CARDS = [
   { id: 'services',  label: 'Services' },
 ]
 
-export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont, user, setUser, instances, gpus, onAddCard, onToggleCard }) {
+export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont, authUser, logout, instances, gpus, onAddCard, onToggleCard }) {
   const [showCards, setShowCards] = useState(false)
   const panelRef = useRef(null)
 
@@ -43,9 +43,16 @@ export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont,
         </select>
       </div>
       <div className="toolbar-group">
-        <User size={13} style={{ color: 'var(--muted)' }} />
-        <span className="toolbar-label">User</span>
-        <input type="text" value={user} onChange={e => setUser(e.target.value)} style={{ width: 90 }} placeholder="default" />
+        <User size={13} style={{ color: 'var(--accent)' }} />
+        <span className="toolbar-label" style={{ color: 'var(--text)', fontWeight: 600 }}>{authUser}</span>
+        <button
+          className="toolbar-btn"
+          onClick={logout}
+          title="Sign out"
+          style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}
+        >
+          <LogOut size={12} /> Sign out
+        </button>
       </div>
 
       {/* Card manager */}
