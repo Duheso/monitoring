@@ -20,7 +20,7 @@ export default function GPUProcessCard({ data, onClose }) {
   // Filter state
   const [filterGPU,  setFilterGPU]  = useState('')   // comma-separated GPU indices
   const [filterPID,  setFilterPID]  = useState('')   // comma-separated PIDs
-  const [filterName, setFilterName] = useState('')   // substring match
+  const [filterName, setFilterName] = useState('')   // comma-separated substrings (OR semantics)
 
   const parseSet = (s) => new Set(s.split(',').map(x => x.trim()).filter(Boolean))
 
@@ -36,9 +36,12 @@ export default function GPUProcessCard({ data, onClose }) {
   // Apply filters
   if (gpuSet.size > 0) rows = rows.filter(r => gpuSet.has(String(r._gpuIdx)))
   if (pidSet.size > 0) rows = rows.filter(r => pidSet.has(String(r.pid)))
-  if (filterName.trim()) {
-    const q = filterName.trim().toLowerCase()
-    rows = rows.filter(r => r.name?.toLowerCase().includes(q))
+  const nameFilters = filterName.split(',').map(term => term.trim().toLowerCase()).filter(Boolean)
+  if (nameFilters.length > 0) {
+    rows = rows.filter(r => {
+      const name = r.name?.toLowerCase() ?? ''
+      return nameFilters.some(term => name.includes(term))
+    })
   }
 
   const [showFilters, setShowFilters] = useState(false)
