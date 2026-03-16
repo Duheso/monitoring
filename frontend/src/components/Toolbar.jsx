@@ -11,6 +11,7 @@ const SINGLETON_CARDS = [
   { id: 'gpuproc',   label: 'GPU Processes' },
   { id: 'processes', label: 'Processes' },
   { id: 'services',  label: 'Services' },
+  { id: 'ollamaps',  label: 'Ollama PS' },
 ]
 
 export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont, authUser, logout, instances, gpus, onAddCard, onToggleCard }) {

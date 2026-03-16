@@ -664,6 +664,42 @@ def collect_system_info() -> dict:
         return {}
 
 
+# ── Ollama running models ─────────────────────────────────────────────────────
+def collect_ollama_ps() -> list:
+    import re
+    try:
+        out = subprocess.check_output(
+            ['ollama', 'ps'],
+            encoding='utf-8', timeout=5,
+            stderr=subprocess.DEVNULL,
+        )
+        lines = out.strip().splitlines()
+        if len(lines) < 2:
+            return []
+        # Determine column positions from the header line
+        header_line = lines[0]
+        # Find start positions of each header token
+        header_tokens = list(re.finditer(r'\S+', header_line))
+        col_starts = [m.start() for m in header_tokens]
+        col_keys   = [m.group().lower() for m in header_tokens]
+
+        models = []
+        for line in lines[1:]:
+            if not line.strip():
+                continue
+            row = {}
+            for i, key in enumerate(col_keys):
+                start = col_starts[i]
+                end   = col_starts[i + 1] if i + 1 < len(col_starts) else len(line)
+                row[key] = line[start:end].strip()
+            models.append(row)
+        return models
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
 # ── Main metrics collector ────────────────────────────────────────────────────
 def collect_metrics() -> dict:
     global _prev_ts
@@ -732,6 +768,9 @@ def collect_metrics() -> dict:
     # System info (only compute once every 10 iterations to save cpu)
     system_info = collect_system_info()
 
+    # Ollama running models
+    ollama_ps = collect_ollama_ps()
+
     snapshot = {
         'ts':          now,
         'cpu':         {'total': cpu_total, 'percore': cpu_percore},
@@ -743,6 +782,7 @@ def collect_metrics() -> dict:
         'gpu_processes': gpu_processes,
         'network':     network,
         'system':      system_info,
+        'ollama_ps':   ollama_ps,
     }
     metrics_history.append(snapshot)
     return snapshot

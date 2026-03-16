@@ -21,6 +21,7 @@ import NetworkCard    from './components/NetworkCard'
 import SystemInfoCard from './components/SystemInfoCard'
 import ServicesCard   from './components/ServicesCard'
 import JournalCard    from './components/JournalCard'
+import OllamaPSCard   from './components/OllamaPSCard'
 
 // ── Card definitions ──────────────────────────────────────────────────────────
 export const CARD_DEFS = {
@@ -34,10 +35,11 @@ export const CARD_DEFS = {
   processes: { label: 'Processes',       singleton: true,  defaultH: 12, defaultW: 8 },
   services:  { label: 'Services',        singleton: true,  defaultH: 10, defaultW: 4 },
   journal:   { label: 'Journal',         singleton: false, defaultH: 12, defaultW: 4 },
+  ollamaps:  { label: 'Ollama PS',        singleton: true,  defaultH: 8,  defaultW: 6 },
   // singlegpu-{N} are added dynamically
 }
 
-const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','network','gpus','gpuproc','processes','services']
+const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','network','gpus','gpuproc','processes','services','ollamaps']
 
 const DEFAULT_INSTANCES = ['system','cpu','mem','disk','network','gpus','processes','services','journal-default']
 
@@ -215,6 +217,7 @@ function Dashboard({ authUser, token, logout }) {
     if (id === 'gpuproc')   return <GPUProcessCard data={metrics} onClose={() => removeCard(id)} />
     if (id === 'processes') return <ProcessesCard data={metrics?.processes} />
     if (id === 'services')  return <ServicesCard />
+    if (id === 'ollamaps')  return <OllamaPSCard data={metrics?.ollama_ps} />
     if (id.startsWith('journal-'))   return <JournalCard instanceId={id} onClose={instances.filter(x => x.startsWith('journal-')).length > 1 ? () => removeCard(id) : null} />
     if (id.startsWith('singlegpu-')) {
       const idx = parseInt(id.replace('singlegpu-', ''), 10)
