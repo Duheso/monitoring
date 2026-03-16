@@ -9,7 +9,19 @@ import { useColumnSettings } from '../hooks/useColumnSettings'
 const PROC_COLS = [
   { key: 'gpu',         label: 'GPU',     defaultWidth: 50  },
   { key: 'pid',         label: 'PID',     defaultWidth: 65  },
-  { key: 'user',        label: 'User',    defaultWidth: 110 },
+  { 
+    key: 'user',        
+    label: 'User',    
+    defaultWidth: 110,
+    render: (row) => {
+      
+      if (row.user && row.user !== '—' && row.user.trim()) {
+        return row.user;
+      }
+      // Fallback: tentar obter o user via PID (se possível)
+      return <span style={{ color: 'var(--muted)', fontStyle: 'italic' }}>unknown</span>;
+    }
+  },
   { key: 'name',        label: 'Process', defaultWidth: 200 },
   { key: 'used_memory', label: 'Mem',     defaultWidth: 80  },
 ]
