@@ -5,7 +5,9 @@ const SINGLETON_CARDS = [
   { id: 'system',    label: 'System Info' },
   { id: 'cpu',       label: 'CPU' },
   { id: 'mem',       label: 'Memory' },
-  { id: 'disk',      label: 'Disk' },
+  { id: 'disk',      label: 'Disk (/)' },
+  { id: 'disk_raid1',label: 'RAID /raid' },
+  { id: 'disk_raid2',label: 'RAID /raid02' },
   { id: 'network',   label: 'Network' },
   { id: 'gpus',      label: 'GPUs (All)' },
   { id: 'gpuproc',   label: 'GPU Processes' },
@@ -16,11 +18,22 @@ const SINGLETON_CARDS = [
 
 export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont, authUser, logout, instances, gpus, onAddCard, onToggleCard }) {
   const [showCards, setShowCards] = useState(false)
+  const [panelPos, setPanelPos] = useState({ top: 0, left: 0 })
   const panelRef = useRef(null)
+  const btnRef   = useRef(null)
 
   useEffect(() => {
     if (!showCards) return
-    const close = (e) => { if (panelRef.current && !panelRef.current.contains(e.target)) setShowCards(false) }
+    if (btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      setPanelPos({ top: r.bottom + 6, left: r.left })
+    }
+    const close = (e) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target) &&
+        btnRef.current   && !btnRef.current.contains(e.target)
+      ) setShowCards(false)
+    }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [showCards])
@@ -57,8 +70,9 @@ export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont,
       </div>
 
       {/* Card manager */}
-      <div className="toolbar-group" ref={panelRef} style={{ position: 'relative' }}>
+      <div className="toolbar-group">
         <button
+          ref={btnRef}
           className="toolbar-btn"
           onClick={() => setShowCards(v => !v)}
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: showCards ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', color: 'var(--text2)', fontSize: 12 }}
@@ -68,10 +82,11 @@ export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont,
         </button>
 
         {showCards && (
-          <div style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 300,
+          <div ref={panelRef} style={{
+            position: 'fixed', top: panelPos.top, left: panelPos.left, zIndex: 9999,
             background: '#1e293b', border: '1px solid var(--border)', borderRadius: 8,
             padding: 12, minWidth: 260, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
           }}>
             <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Main Cards</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 10 }}>

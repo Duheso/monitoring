@@ -381,11 +381,16 @@ def collect_gpu_metrics() -> tuple[list, list]:
                     pid_v = int(pid_s)
                 except Exception:
                     pid_v = pid_s
+                try:
+                    username = psutil.Process(pid_v).username()
+                except Exception:
+                    username = '—'
                 gpu_processes.append({
                     'pid': pid_v,
                     'name': pname,
                     'used_memory': used_mem,
                     'gpu_uuid': gpu_uuid,
+                    'user': username,
                 })
     except Exception:
         pass
@@ -743,6 +748,17 @@ def collect_metrics() -> dict:
     # Disk I/O
     disk_io = collect_disk_io(delta)
 
+    # RAID disk usage
+    def _disk_usage_safe(path: str) -> dict:
+        try:
+            du = psutil.disk_usage(path)
+            return {'total': du.total, 'used': du.used, 'free': du.free, 'percent': round(du.percent, 1), 'mountpoint': path}
+        except Exception:
+            return {'total': 0, 'used': 0, 'free': 0, 'percent': 0.0, 'mountpoint': path, 'unavailable': True}
+
+    disk_raid1 = _disk_usage_safe('/raid')
+    disk_raid2 = _disk_usage_safe('/raid02')
+
     # Processes (top by CPU)
     procs: list = []
     try:
@@ -777,6 +793,8 @@ def collect_metrics() -> dict:
         'memory':      memory,
         'disk':        disk,
         'disk_io':     disk_io,
+        'disk_raid1':  disk_raid1,
+        'disk_raid2':  disk_raid2,
         'processes':   procs,
         'gpus':        gpus,
         'gpu_processes': gpu_processes,

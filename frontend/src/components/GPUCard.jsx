@@ -7,10 +7,11 @@ import ResizableTable from './ResizableTable'
 import { useColumnSettings } from '../hooks/useColumnSettings'
 
 const PROC_COLS = [
-  { key: 'gpu',         label: 'GPU',    defaultWidth: 50  },
-  { key: 'pid',         label: 'PID',    defaultWidth: 65  },
+  { key: 'gpu',         label: 'GPU',     defaultWidth: 50  },
+  { key: 'pid',         label: 'PID',     defaultWidth: 65  },
+  { key: 'user',        label: 'User',    defaultWidth: 110 },
   { key: 'name',        label: 'Process', defaultWidth: 200 },
-  { key: 'used_memory', label: 'Mem',    defaultWidth: 80  },
+  { key: 'used_memory', label: 'Mem',     defaultWidth: 80  },
 ]
 
 const TILE_METRICS = [
@@ -69,6 +70,7 @@ export default function GPUCard({ data, history }) {
   const [showFilters, setShowFilters] = useState(false)
   const [filterGPU,   setFilterGPU]  = useState('')
   const [filterPID,   setFilterPID]  = useState('')
+  const [filterUser,  setFilterUser] = useState('')
   const [filterName,  setFilterName] = useState('')
 
   const parseSet = (s) => new Set(s.split(',').map(x => x.trim()).filter(Boolean))
@@ -81,6 +83,8 @@ export default function GPUCard({ data, history }) {
   })
   if (gpuSet.size > 0)   procRows = procRows.filter(r => gpuSet.has(String(r._gpuIdx)))
   if (pidSet.size > 0)   procRows = procRows.filter(r => pidSet.has(String(r.pid)))
+  const userFilters2 = filterUser.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+  if (userFilters2.length > 0) procRows = procRows.filter(r => userFilters2.some(t => (r.user ?? '').toLowerCase().includes(t)))
   if (filterName.trim()) procRows = procRows.filter(r => r.name?.toLowerCase().includes(filterName.toLowerCase()))
 
   return (
@@ -161,13 +165,13 @@ export default function GPUCard({ data, history }) {
           <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             GPU Processes ({procRows.length}{procRows.length !== gpuProcs.length ? `/${gpuProcs.length}` : ''})
             <button className="icon-btn" onClick={() => setShowFilters(v => !v)} title="Filters"
-              style={{ padding: '2px 4px', color: (gpuSet.size || pidSet.size || filterName) ? 'var(--accent)' : undefined }}>
+              style={{ padding: '2px 4px', color: (gpuSet.size || pidSet.size || filterUser || filterName) ? 'var(--accent)' : undefined }}>
               <Filter size={11} />
             </button>
           </div>
 
           {showFilters && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginBottom: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6, marginBottom: 8 }}>
               <div>
                 <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>GPU indices (0,1,…)</div>
                 <input value={filterGPU} onChange={e => setFilterGPU(e.target.value)} placeholder="0,1,2"
@@ -176,6 +180,11 @@ export default function GPUCard({ data, history }) {
               <div>
                 <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>PIDs</div>
                 <input value={filterPID} onChange={e => setFilterPID(e.target.value)} placeholder="1234,5678"
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', color: 'var(--text)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>User</div>
+                <input value={filterUser} onChange={e => setFilterUser(e.target.value)} placeholder="root, user1…"
                   style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', color: 'var(--text)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }} />
               </div>
               <div>

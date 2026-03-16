@@ -22,6 +22,7 @@ import SystemInfoCard from './components/SystemInfoCard'
 import ServicesCard   from './components/ServicesCard'
 import JournalCard    from './components/JournalCard'
 import OllamaPSCard   from './components/OllamaPSCard'
+import RaidDiskCard  from './components/RaidDiskCard'
 
 // ── Card definitions ──────────────────────────────────────────────────────────
 export const CARD_DEFS = {
@@ -29,6 +30,8 @@ export const CARD_DEFS = {
   cpu:       { label: 'CPU',             singleton: true,  defaultH: 10, defaultW: 4 },
   mem:       { label: 'Memory',          singleton: true,  defaultH: 7,  defaultW: 4 },
   disk:      { label: 'Disk',            singleton: true,  defaultH: 10, defaultW: 4 },
+  disk_raid1:{ label: 'RAID /raid',      singleton: true,  defaultH: 8,  defaultW: 4 },
+  disk_raid2:{ label: 'RAID /raid02',    singleton: true,  defaultH: 8,  defaultW: 4 },
   network:   { label: 'Network',         singleton: true,  defaultH: 10, defaultW: 4 },
   gpus:      { label: 'GPUs (All)',       singleton: true,  defaultH: 20, defaultW: 12 },
   gpuproc:   { label: 'GPU Processes',   singleton: true,  defaultH: 10, defaultW: 6 },
@@ -39,7 +42,7 @@ export const CARD_DEFS = {
   // singlegpu-{N} are added dynamically
 }
 
-const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','network','gpus','gpuproc','processes','services','ollamaps']
+const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','disk_raid1','disk_raid2','network','gpus','gpuproc','processes','services','ollamaps']
 
 const DEFAULT_INSTANCES = ['system','cpu','mem','disk','network','gpus','processes','services','journal-default']
 
@@ -212,6 +215,8 @@ function Dashboard({ authUser, token, logout }) {
     if (id === 'cpu')       return <CPUCard data={cpuData} history={hist} />
     if (id === 'mem')       return <MemCard data={metrics?.memory} history={hist} />
     if (id === 'disk')      return <DiskCard data={metrics?.disk} diskIo={metrics?.disk_io} history={hist} />
+    if (id === 'disk_raid1')return <RaidDiskCard data={metrics?.disk_raid1} title="RAID /raid" device="/dev/md127" historyKey="disk_raid1" history={hist} />
+    if (id === 'disk_raid2')return <RaidDiskCard data={metrics?.disk_raid2} title="RAID /raid02" device="/dev/md126" historyKey="disk_raid2" history={hist} />
     if (id === 'network')   return <NetworkCard data={metrics?.network} history={hist} />
     if (id === 'gpus')      return <GPUCard data={metrics} history={hist} />
     if (id === 'gpuproc')   return <GPUProcessCard data={metrics} onClose={() => removeCard(id)} />

@@ -42,6 +42,17 @@ body {
 .app-body { padding: 0 16px 20px; flex: 1 }
 
 /* ── Header ─────────────────────────────────────────────────────────── */
+.app-header-wrapper {
+  overflow: hidden;
+  max-height: 120px;
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+.app-header-wrapper.collapsed {
+  max-height: 0;
+}
 .app-header {
   display: flex;
   align-items: center;
@@ -51,8 +62,21 @@ body {
   background: rgba(13,17,32,0.95);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(10px);
-  position: sticky; top: 0; z-index: 1000;
   flex-wrap: wrap;
+  transform: translateX(0);
+  opacity: 1;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+}
+.app-header-wrapper.collapsed .app-header {
+  transform: translateX(-60px);
+  opacity: 0;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* leave room on the right for the toggle button */
+  padding-right: 36px;
 }
 .header-left {
   display: flex;
@@ -80,6 +104,37 @@ body {
 .conn-dot.connecting   { background: var(--warning); animation: pulse 1s infinite }
 .conn-dot.disconnected { background: var(--danger) }
 @keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.4 } }
+
+/* ── Header toggle button ───────────────────────────────────────────── */
+.header-toggle-btn {
+  position: fixed;
+  top: 10px;
+  right: 16px;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  background: rgba(13,17,32,0.85);
+  color: var(--muted, #94a3b8);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 0.2s, color 0.2s, border-color 0.2s, top 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.header-toggle-btn:hover {
+  background: rgba(59,130,246,0.15);
+  color: var(--accent, #3b82f6);
+  border-color: rgba(59,130,246,0.4);
+}
+.header-toggle-btn--collapsed {
+  top: 10px;
+  background: rgba(13,17,32,0.92);
+  border-color: var(--accent, #3b82f6);
+  color: var(--accent, #3b82f6);
+}
 
 /* ── Toolbar ─────────────────────────────────────────────────────────── */
 .toolbar {
