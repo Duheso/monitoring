@@ -1,611 +1,743 @@
-# 🗺️ NavSP — Plano de Implementação
-**Aplicativo de Navegação 3D para São Paulo**  
-Stack: Python (FastAPI) + React (PWA) + SQLite | Idioma: PT-BR
+# 🚗 NavSP — Plano Evoluído: Percepção ADAS + Visualização 3D Simulada
+**Evolução do p2.md com câmera ADAS e renderização de rua em tempo real (estilo simulador)**  
+Stack: Python (FastAPI) + React (PWA) + PostgreSQL + Three.js + ONNX/TF.js | Self-Hosted | PT-BR
 
 ---
 
-## 📌 Visão Geral do Produto
+## 📌 Análise do Plano Atual (p2.md) — O que já funciona?
 
-NavSP é um Progressive Web App (PWA) mobile-first de navegação turn-by-turn para São Paulo com renderização 3D estilo Tesla/carros chineses. O mapa exibe perspectiva inclinada da pista, sinalização antecipada de manobras, dados de tráfego em tempo real e recalculo automático de rota. O usuário pode salvar locais e rotas favoritas, fazer login via Google/Apple e ouvir instruções de voz opcionais em PT-BR.
+### ✅ Navegação estilo Google Maps — O plano atual JÁ cobre
+
+| Funcionalidade | Status no p2.md | Como funciona |
+|---|---|---|
+| Mapa 3D com perspectiva inclinada | ✅ Cobertura total | MapLibre GL JS com `pitch: 60°`, `bearing` segue o heading do GPS |
+| Câmera segue o usuário enquanto dirige | ✅ M2.2 | `easeTo()` suave a cada update de GPS |
+| Turn-by-turn (setas de manobra) | ✅ M2.4 + M2.5 | Snap-to-route + próxima manobra calculada por segmento OSM |
+| HUD de velocidade, ETA, distância | ✅ M2.6 | `<NavigationHUD />` com dados do GPS |
+| Voz PT-BR | ✅ M2.7 | Web Speech API com TTS |
+| Recalculo automático de rota | ✅ M2.9 | `isOffRoute()` + `useRerouting` |
+| Tráfego em tempo real | ✅ Fase 4 | FCD (Floating Car Data) via probes GPS dos usuários |
+| Rota plotada em 3D | ✅ M2.3 | deck.gl `PathLayer` azul elétrico sobre o mapa |
+
+**Conclusão:** Para navegação turn-by-turn estilo Google Maps/Waze — o p2.md é completo e funciona.
 
 ---
 
-## 🧱 Decisões de Escopo (Confirmadas)
+### ❌ O que o plano atual NÃO cobre (nova demanda)
 
-| Atributo | Decisão |
+O usuário quer uma camada adicional: **visão sintética da rua em tempo real, plotada em 3D com cores de simulação**, usando câmera frontal (ADAS/dashcam). Isso é diferente do mapa de navegação — é um **modo de percepção do ambiente físico ao redor do carro**.
+
+Analogia: Tesla Autopilot visualization — não mostra a câmera, mostra faixas, carros e guias desenhados como figuras geométricas coloridas.
+
+---
+
+## 🆕 Novo Módulo: NavSP Vision — Percepção ADAS + Renderização Sintética
+
+### O que é e o que não é
+
+| É | Não é |
 |---|---|
-| Plataforma | PWA mobile-first (roda no browser do celular) |
-| Cobertura | São Paulo + região metropolitana (MVP) |
-| Visual 3D | Perspectiva inclinada (pitch + bearing) — estilo Tesla |
-| GPS | Automático (Geolocation API) + digitação manual |
-| Favoritos | Locais + rotas favoritas |
-| Transporte | Somente carro |
-| Tráfego | Tempo real + recalculo automático de rota |
-| Offline | Não (somente online) |
-| Auth | Login social: Google OAuth2 + Apple Sign-In |
-| Voz | Opcional (toggle ligar/desligar), TTS PT-BR |
-| Backend | Python + FastAPI |
-| Banco | SQLite + SQLAlchemy |
-| Idioma UI | Português Brasileiro (PT-BR) |
-| Deploy | A definir (opções documentadas abaixo) |
+| Detecção de faixas, veículos, guias, calçadas pela câmera | Vídeo real da câmera exibido na tela |
+| Renderização 3D geométrica com cores de simulação | AR (realidade aumentada) sobreposta à câmera |
+| Overlay sintético em tempo real durante a condução | Sistema de segurança (ADAS de alerta de colisão) |
+| Complementa o mapa de navegação do p2.md | Substitui o mapa de navegação |
 
 ---
 
-## 🗺️ APIs Disponíveis: Análise Completa
+## 🏗️ Arquitetura Geral do Sistema Evoluído
 
-### Opção A — Free Tier (Início rápido, sem infra extra)
-
-| API | Função | Free Tier | Limite | Link |
-|---|---|---|---|---|
-| **MapLibre GL JS** | Renderizador 3D | 100% grátis | Open source | maplibre.org |
-| **OpenFreeMap** | Tiles (camadas do mapa) | 100% grátis | CDN Cloudflare | openfreemap.org |
-| **Maptiler Cloud** | Tiles alternativos | 100k req/mês | Sim | maptiler.com |
-| **OpenRouteService** | Roteamento (carro) | 2.000 req/dia, 40/min | Sim | openrouteservice.org |
-| **Nominatim (OSM)** | Geocoding (busca endereço) | Grátis | 1 req/segundo | nominatim.org |
-| **Photon** | Geocoding alternativo | Grátis (hosted) | Sem SLA | photon.komoot.io |
-| **HERE Maps Traffic API** | Tráfego em tempo real | 250.000 trans/mês | Sim | developer.here.com |
-
-**✅ Prós do Free Tier:** Início rápido, sem servidor adicional, sem custo  
-**❌ Contras do Free Tier:** Limites de requisições, dependência de terceiros, SLA não garantido, risco de cobrança ao escalar
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        CLIENTE (PWA Mobile/Tablet)                       │
+│                                                                          │
+│  ┌─────────────────────────────┐  ┌──────────────────────────────────┐  │
+│  │    MAPA DE NAVEGAÇÃO        │  │    VISÃO SINTÉTICA (NavSP Vision) │  │
+│  │  MapLibre GL JS (p2.md)     │  │  Three.js / React Three Fiber     │  │
+│  │  Rota, GPS, HUD, Voz        │  │  Faixas, Veículos, Guias, Calçada│  │
+│  │  Pitch 60°, bearing GPS     │  │  Cores simulação (sem câmera raw) │  │
+│  └─────────────────────────────┘  └──────────────────────────────────┘  │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │                    PIPELINE DE PERCEPÇÃO                          │   │
+│  │   getUserMedia() → frames → ONNX Runtime Web / TF.js             │   │
+│  │   Lane Detection | Object Detection | Depth Estimation           │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                 │                                        │
+│                              WebSocket                                   │
+└─────────────────────────────────┼───────────────────────────────────────┘
+                                  │ (fallback: backend processing)
+┌─────────────────────────────────▼───────────────────────────────────────┐
+│                    BACKEND VISION (FastAPI + CV)                         │
+│  WebSocket endpoint → recebe frames JPEG → processa com PyTorch/ONNX    │
+│  OpenCV + lane model + YOLO v8 + MiDaS depth                           │
+│  Retorna: detections JSON → cliente renderiza em 3D                     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-### Opção B — Self-Hosted (Controle total, sem limites de API)
+## 📷 Fonte de Câmera — ADAS / Dashcam / Celular
 
-| Solução | Função | Requisitos de Infra | Complexidade |
+O usuário mencionou câmera ADAS frontal (tipo dashcam de segurança).
+
+### Opções de integração de câmera
+
+| Fonte | Como capturar | Prós | Contras |
 |---|---|---|---|
-| **OpenMapTiles** | Tile server (mapa) | 4 vCPU, 8GB RAM, 60GB SSD | Média |
-| **OSRM** | Roteamento carro | 16–32GB RAM, 100GB SSD, 4 vCPU | Alta |
-| **Valhalla** | Roteamento alternativo (mais flexível) | 8–16GB RAM, 60GB SSD | Alta |
-| **Photon self-hosted** | Geocoding | 4GB RAM, 60GB SSD | Média |
-| **Nominatim self-hosted** | Geocoding completo | 32GB RAM, 500GB SSD (BR) | Muito Alta |
+| **Câmera do próprio celular** (montado no para-brisa) | `navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })` | Sem hardware extra, direto no PWA | Câmera traseira do celular, limitado a 30fps no browser |
+| **Câmera ADAS USB/IP** (dashcam em rede local) | `fetch` de stream MJPEG ou WebRTC local | Câmera melhor posicionada, qualidade superior | Requer configuração de rede local no carro |
+| **ADAS via Bluetooth/USB** (ex.: câmeras ADAS aftermarket) | API nativa via React Native ou Capacitor | Integração total com câmera dedicada | Requer app nativo, não PWA puro |
 
-**Custo estimado de VPS para self-hosted completo:** ~$80–$150/mês (ex.: Hetzner CPX51 ou AWS c6a.2xlarge)
-
-**✅ Prós do Self-Hosted:** Sem limites de uso, sem vendor lock-in, dados ficam na sua infra, LGPD-friendly  
-**❌ Contras do Self-Hosted:** Alto consumo de RAM/disco, manutenção de infra, atualizações de dados OSM periódicas, setup complexo
+### 🏆 Recomendação MVP
+**Câmera do celular via `getUserMedia`** — funciona hoje no PWA, sem hardware adicional.  
+Celular montado no suporte de para-brisa, câmera traseira apontada para a rua.
 
 ---
 
-### 🏆 Recomendação por Fase
+## 🧠 Pipeline de Percepção — Computer Vision em Tempo Real
 
-| Fase | Estratégia | Motivo |
-|---|---|---|
-| MVP / Desenvolvimento | Free Tier (OpenFreeMap + OpenRouteService + HERE) | Custo zero, início rápido |
-| Produto em Produção | Migrar para Self-Hosted OSRM + OpenMapTiles | Escalabilidade e controle |
-| Tráfego em tempo real | HERE Maps (manter free tier ou pagar) | Alternativa self-hosted não existe gratuita |
-
----
-
-## 🏗️ Arquitetura do Sistema
+### Três tarefas de visão computacional
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     CLIENTE (PWA)                        │
-│  React + TypeScript + Vite                               │
-│  MapLibre GL JS (3D render) + deck.gl (overlays)         │
-│  react-maplibre + Zustand + TailwindCSS                  │
-│  Web Geolocation API + Web Speech API (TTS PT-BR)        │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTPS (REST + JWT)
-┌────────────────────────▼────────────────────────────────┐
-│                   BACKEND (FastAPI)                      │
-│  Python 3.12 + FastAPI + Uvicorn                         │
-│  SQLAlchemy + SQLite (favoritos, usuários, rotas)        │
-│  Authlib (OAuth2 Google/Apple) + JWT                     │
-│  httpx (proxy para APIs externas)                        │
-└──┬──────────────────────────────────────────────────┬───┘
-   │                                                  │
-   ▼                                                  ▼
-APIs de Roteamento                          APIs de Tráfego
-OpenRouteService / OSRM                     HERE Maps Traffic API
-Nominatim / Photon (geocoding)
-OpenFreeMap / Maptiler (tiles via frontend)
+Frame da câmera (720p, 15fps)
+          │
+          ├──► [1] LANE DETECTION  ──────► Coordenadas das faixas (polilinha 2D)
+          │         UFLD / CLRNet          + tipo: faixa contínua, tracejada, guia
+          │
+          ├──► [2] OBJECT DETECTION ─────► Bounding boxes de veículos, pedestres
+          │         YOLO v8 Nano           + classe (carro, moto, caminhão, pedestre)
+          │         ou YOLOv11             + distância estimada
+          │
+          └──► [3] DEPTH ESTIMATION ─────► Mapa de profundidade 2D→3D
+                    MiDaS Small            Converte detecções para posição 3D relativa
+                    ou Depth Anything V2
+```
+
+### Estratégia de processamento: On-Device vs Backend
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    DECISÃO DE PROCESSAMENTO                       │
+│                                                                   │
+│  ON-DEVICE (TF.js / ONNX.js)     BACKEND (Python + PyTorch)     │
+│  ─────────────────────────────    ───────────────────────────    │
+│  Lane Detection (UFLD nano)   → mais rápido (~30ms/frame)       │
+│  Objetos (YOLO nano)          → sem latência de rede            │
+│  Depth (MiDaS small)          → privacy-first (frame local)     │
+│                                                                   │
+│  Vantagem: latência <80ms, funciona sem internet                 │
+│  Desvantagem: aquece o celular, modelos limitados               │
+│                                                                   │
+│  Se celular fraco → enviar frames ao backend via WebSocket      │
+│  Backend com GPU processa e retorna detections JSON em ~50ms    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Modelos ONNX recomendados (open source, licença permissiva)
+
+| Tarefa | Modelo | Tamanho | Latência aprox. (mobile) |
+|---|---|---|---|
+| Detecção de faixas | UFLD-v2 (Ultra Fast Lane Detection) | ~7MB | ~25ms |
+| Detecção de objetos | YOLOv8n (nano) ou YOLOv11n | ~6MB | ~30ms |
+| Estimativa de profundidade | MiDaS Small (int8 quantizado) | ~12MB | ~40ms |
+| Total (pipeline paralelo) | — | ~25MB | ~60–80ms |
+
+**Todos exportáveis para ONNX → rodam no browser via `onnxruntime-web` com WebAssembly/WebGL.**
+
+---
+
+## 🎮 Camada de Renderização 3D Sintética — NavSP Vision
+
+### Por que Three.js e não MapLibre/deck.gl para isso?
+
+| Aspecto | MapLibre/deck.gl (p2.md) | Three.js + R3F (nova camada) |
+|---|---|---|
+| Propósito | Renderizar mapa geográfico + rota | Renderizar cena 3D sintética da rua |
+| Sistema de coordenadas | Coordenadas GPS (WGS84) | Coordenadas relativas ao carro (metros) |
+| Dados de entrada | Tiles vetoriais OSM + GeoJSON | Detecções da câmera (CV output) |
+| Estilo visual | Cartográfico | Simulador / videogame |
+
+**São duas camadas distintas que se complementam** — o mapa fica em um painel, a visão sintética em outro (ou em overlay 50% transparente).
+
+### O que cada elemento renderiza
+
+```
+CENA 3D SINTÉTICA (câmera virtual atrás/acima do carro)
+─────────────────────────────────────────────────────────
+
+ [Faixas da via]
+  • Geometria: PlaneGeometry longa e estreita
+  • Cor: #FFFFFF (faixa contínua) | #FFDD00 (tracejada) | #FF4444 (guia/limite)
+  • Posição: projetada da detecção 2D + depth map → 3D world space
+
+ [Calçada / passeio]
+  • Geometria: PlaneGeometry lateral, ligeiramente elevada (+0.1m)
+  • Cor: #888888 (cinza claro)
+
+ [Guard Rail / Guia de proteção]
+  • Geometria: BoxGeometry estreita e alta (0.2m × 0.8m × comprimento)
+  • Cor: #AAAAAA (prata metálico)
+
+ [Outros Veículos]
+  • Geometria: BoxGeometry proporcional (carro ~4.5m × 1.8m × 1.5m)
+  • Cor por distância:
+      < 10m  → #FF3300 (vermelho — alerta)
+      10–30m → #FFAA00 (laranja — atenção)
+      > 30m  → #00CC44 (verde — seguro)
+  • Opacidade: 80%
+
+ [Pista/Asfalto]
+  • Geometria: PlaneGeometry grande, perspectiva em fuga
+  • Cor: #1A1A2E (azul escuro estilo noite) | #2A2A2A (cinza escuro diurno)
+
+ [Veículo do próprio usuário]
+  • Silhueta simples do carro (sempre centralizada na cena)
+  • Cor: #0066FF (azul)
+```
+
+### Stack de renderização
+
+```
+Three.js + React Three Fiber (R3F)
+├── @react-three/fiber          — React bindings para Three.js
+├── @react-three/drei           — helpers: câmera, luzes, geometrias
+├── three                       — engine 3D WebGL
+└── @react-three/postprocessing — efeitos: bloom nos veículos próximos
 ```
 
 ---
 
-## 🛠️ Stack Tecnológica Completa
+## 🔄 Fluxo de Dados: Câmera → Percepção → Renderização
 
-### Frontend
-| Tecnologia | Versão | Função |
-|---|---|---|
-| React | 18+ | Framework UI |
-| TypeScript | 5+ | Tipagem estática |
-| Vite | 5+ | Build tool (PWA plugin) |
-| MapLibre GL JS | 4+ | Renderizador de mapa 3D WebGL |
-| deck.gl | 9+ | Overlays 3D (pista, rota, animações) |
-| react-maplibre | Latest | Wrapper React para MapLibre |
-| Zustand | 4+ | Gerenciamento de estado |
-| TailwindCSS | 3+ | Estilização |
-| React Query | 5+ | Cache e fetch de dados |
-| Vite PWA Plugin | Latest | Service Worker + Manifest |
-| Web Speech API | Browser native | Narração de voz TTS PT-BR |
-| Geolocation API | Browser native | GPS do dispositivo |
-
-### Backend
-| Tecnologia | Versão | Função |
-|---|---|---|
-| Python | 3.12+ | Linguagem base |
-| FastAPI | 0.110+ | Framework web async |
-| Uvicorn | 0.29+ | ASGI server |
-| SQLAlchemy | 2.0+ | ORM para SQLite |
-| Alembic | Latest | Migrations de banco |
-| Authlib | 1.3+ | OAuth2 (Google/Apple) |
-| python-jose | Latest | JWT tokens |
-| httpx | Latest | Cliente HTTP async |
-| Pydantic v2 | 2+ | Validação de dados |
-| python-dotenv | Latest | Variáveis de ambiente |
-
-### DevOps / Infra
-| Tecnologia | Função |
-|---|---|
-| Docker + Docker Compose | Ambiente de desenvolvimento local |
-| GitHub Actions | CI/CD pipeline |
-| Nginx (produção) | Reverse proxy + HTTPS |
+```
+1. getUserMedia() captura frame (720p, 15fps)
+         │
+2. Canvas offscreen → ImageData
+         │
+3. Pré-processamento:
+   • Resize para 640×360 (modelo input size)
+   • Normalize [0,1]
+   • Converter para tensor Float32
+         │
+4. Inferência paralela (Web Workers, não bloqueia UI):
+   ├── Worker 1: UFLD → lane_points[]  (polilíneas de faixas)
+   ├── Worker 2: YOLOv8 → detections[] (bbox + classe + conf)
+   └── Worker 3: MiDaS → depth_map[]  (tensor 2D de distâncias)
+         │
+5. Fusão de percepção:
+   • Para cada detection: lookup depth_map na bbox center
+   • Projeto perspectivo inverso → (x, y, z) relativo ao carro
+   • Filtrar detections com conf < 0.4
+         │
+6. Postagem no estado React (zustand usePerceptionStore)
+         │
+7. Three.js re-render a 15fps:
+   • Atualiza posições dos BoxGeometry (veículos)
+   • Atualiza pontos dos PlaneGeometry (faixas)
+   • Cor dos veículos baseada na distância Z
+```
 
 ---
 
-## 📦 Estrutura do Projeto (Monorepo)
+## 🖼️ Interface do Usuário — Layouts de Visualização
+
+### Modo A — Split Screen (recomendado MVP)
+
+```
+┌─────────────────────────────────────────────┐
+│        MAPA DE NAVEGAÇÃO (60% tela)          │
+│   MapLibre 3D — rota, seta, HUD, GPS         │
+│   pitch 60°, bearing segue o carro           │
+├─────────────────────────────────────────────┤
+│      VISÃO SINTÉTICA ADAS (40% tela)         │
+│   Three.js — faixas, veículos, guias         │
+│   Câmera virtual: 3m atrás, 2m acima do carro│
+└─────────────────────────────────────────────┘
+```
+
+### Modo B — Overlay (alternativo)
+- Mapa de navegação em tela cheia
+- Visão sintética 3D em overlay com transparência 60%
+- Botão toggle para alternar modos
+
+### Modo C — Tela cheia ADAS (para foco na percepção)
+- Apenas a cena 3D sintética + HUD mínimo de navegação (próxima manobra + distância)
+
+---
+
+## 📦 Evolução da Stack Tecnológica
+
+### Frontend — Adições ao p2.md
+
+| Tecnologia | Versão | Função |
+|---|---|---|
+| **three** | r160+ | Engine 3D WebGL para cena sintética |
+| **@react-three/fiber** | 8+ | React renderer para Three.js |
+| **@react-three/drei** | 9+ | Geometrias prontas, câmera helpers |
+| **onnxruntime-web** | 1.18+ | Inferência ONNX no browser (WebAssembly + WebGL) |
+| **@tensorflow/tfjs** | 4+ | Alternativa TF.js para modelos leves |
+| **comlink** | 4+ | Comunicação com Web Workers (inferência non-blocking) |
+
+### Backend — Adições ao p2.md
+
+| Tecnologia | Versão | Função |
+|---|---|---|
+| **opencv-python-headless** | 4.9+ | Processamento de imagem (decode, resize, preprocess) |
+| **onnxruntime** | 1.18+ | Inferência ONNX no servidor (CPU/GPU) |
+| **torch** (opcional) | 2.3+ | Se quiser modelos PyTorch nativos |
+| **numpy** | 1.26+ | Manipulação de tensores |
+| **websockets** | 12+ | Stream bidirecional câmera ↔ backend |
+
+### Docker — Novo serviço
+
+```yaml
+# docker-compose.yml (adição ao p2.md)
+services:
+  navsp-vision:
+    build: ./vision-service
+    ports:
+      - "8765:8765"   # WebSocket endpoint
+    environment:
+      - MODEL_LANE=models/ufld_v2.onnx
+      - MODEL_YOLO=models/yolov8n.onnx
+      - MODEL_DEPTH=models/midas_small_int8.onnx
+    volumes:
+      - ./vision-service/models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]    # opcional, se tiver GPU
+```
+
+---
+
+## 📁 Estrutura do Projeto — Adições ao p2.md
 
 ```
 navsp/
-├── frontend/                    # React PWA
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── Map/             # MapLibre + deck.gl
-│   │   │   ├── Navigation/      # HUD de navegação, manobras
-│   │   │   ├── Search/          # Busca de endereço (autocomplete)
-│   │   │   ├── Favorites/       # Lista de favoritos
-│   │   │   ├── Auth/            # Login Google/Apple
-│   │   │   └── UI/              # Botões, modais, toasts
-│   │   ├── hooks/               # useGeolocation, useNavigation, useRoute
-│   │   ├── store/               # Zustand stores
-│   │   ├── services/            # API clients (backend, HERE, ORS)
-│   │   ├── types/               # TypeScript interfaces
-│   │   └── utils/               # Helpers (coords, formatação)
-│   ├── public/
-│   │   └── icons/               # PWA icons
-│   ├── vite.config.ts
-│   └── package.json
+├── frontend/
+│   └── src/
+│       ├── components/
+│       │   ├── Vision/                    # ← NOVO
+│       │   │   ├── SyntheticScene.tsx     # Canvas Three.js principal
+│       │   │   ├── LaneLines.tsx          # Renderiza faixas detectadas
+│       │   │   ├── VehicleBox.tsx         # Renderiza veículos como boxes
+│       │   │   ├── RoadSurface.tsx        # Asfalto simulado
+│       │   │   ├── Guardrail.tsx          # Guard rails / guias
+│       │   │   ├── SyntheticHUD.tsx       # Overlay de distâncias
+│       │   │   └── __tests__/
+│       │   └── Map/                       # Existente do p2.md
+│       ├── hooks/
+│       │   ├── useCameraStream.ts         # ← NOVO: getUserMedia wrapper
+│       │   ├── usePerception.ts           # ← NOVO: orquestra workers de CV
+│       │   └── __tests__/
+│       ├── workers/                       # ← NOVO: Web Workers para inferência
+│       │   ├── laneDetectionWorker.ts     # UFLD via ONNX
+│       │   ├── objectDetectionWorker.ts   # YOLOv8 via ONNX
+│       │   └── depthWorker.ts             # MiDaS via ONNX
+│       ├── store/
+│       │   └── usePerceptionStore.ts      # ← NOVO: estado das detecções
+│       └── utils/
+│           ├── projectionUtils.ts         # ← NOVO: 2D→3D projection math
+│           └── perceptionFusion.ts        # ← NOVO: fusão lane+object+depth
 │
-├── backend/                     # FastAPI
+├── vision-service/                        # ← NOVO: serviço backend de CV
 │   ├── app/
-│   │   ├── api/
-│   │   │   ├── v1/
-│   │   │   │   ├── auth.py      # OAuth2 endpoints
-│   │   │   │   ├── favorites.py # CRUD de locais favoritos
-│   │   │   │   ├── routes.py    # CRUD de rotas favoritas
-│   │   │   │   └── proxy.py     # Proxy para APIs externas
-│   │   ├── core/
-│   │   │   ├── config.py        # Settings (env vars)
-│   │   │   ├── security.py      # JWT, OAuth helpers
-│   │   │   └── database.py      # SQLAlchemy setup
-│   │   ├── models/              # SQLAlchemy models
-│   │   ├── schemas/             # Pydantic schemas
-│   │   └── main.py              # FastAPI app entry
-│   ├── alembic/                 # Migrations
+│   │   ├── main.py                        # FastAPI + WebSocket endpoint
+│   │   ├── models/
+│   │   │   ├── lane_detector.py           # UFLD wrapper
+│   │   │   ├── object_detector.py         # YOLO wrapper
+│   │   │   └── depth_estimator.py         # MiDaS wrapper
+│   │   ├── pipeline/
+│   │   │   ├── frame_processor.py         # Orquestra os 3 modelos
+│   │   │   └── perception_fusion.py       # Merge detections + depth
+│   │   └── utils/
+│   │       └── camera_math.py             # Projeção perspectiva inversa
+│   ├── models/                            # Arquivos .onnx (não commitados)
+│   │   ├── ufld_v2.onnx
+│   │   ├── yolov8n.onnx
+│   │   └── midas_small_int8.onnx
+│   ├── tests/
+│   │   ├── test_lane_detector.py
+│   │   ├── test_object_detector.py
+│   │   ├── test_depth_estimator.py
+│   │   ├── test_frame_processor.py
+│   │   └── test_perception_fusion.py
 │   ├── requirements.txt
 │   └── Dockerfile
 │
-├── docker-compose.yml
-├── .env.example
-└── README.md
+└── (restante igual ao p2.md)
 ```
 
 ---
 
-## 📊 Modelo de Banco de Dados (SQLite)
+## 📊 Modelo de Dados — Adições ao p2.md
 
 ```sql
--- Usuários
-CREATE TABLE users (
-    id          TEXT PRIMARY KEY,      -- UUID
-    email       TEXT UNIQUE NOT NULL,
-    name        TEXT,
-    avatar_url  TEXT,
-    provider    TEXT NOT NULL,         -- 'google' | 'apple'
-    provider_id TEXT UNIQUE NOT NULL,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+-- Calibração de câmera por usuário (necessária para projeção 3D precisa)
+CREATE TABLE camera_calibration (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+    -- Parâmetros intrínsecos
+    focal_length_px REAL,
+    principal_x     REAL,
+    principal_y     REAL,
+    -- Parâmetros extrínsecos (posição do celular no para-brisa)
+    mount_height_m  REAL DEFAULT 1.3,    -- altura do celular do chão
+    mount_pitch_deg REAL DEFAULT 0.0,    -- ângulo de inclinação
+    -- Dimensões da imagem
+    frame_width_px  INTEGER DEFAULT 1280,
+    frame_height_px INTEGER DEFAULT 720,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Locais Favoritos
-CREATE TABLE favorite_places (
-    id         TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL REFERENCES users(id),
-    name       TEXT NOT NULL,          -- apelido do usuário
-    address    TEXT,
-    latitude   REAL NOT NULL,
-    longitude  REAL NOT NULL,
-    icon       TEXT DEFAULT 'star',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Rotas Favoritas
-CREATE TABLE favorite_routes (
-    id              TEXT PRIMARY KEY,
-    user_id         TEXT NOT NULL REFERENCES users(id),
-    name            TEXT NOT NULL,
-    origin_name     TEXT NOT NULL,
-    origin_lat      REAL NOT NULL,
-    origin_lng      REAL NOT NULL,
-    dest_name       TEXT NOT NULL,
-    dest_lat        REAL NOT NULL,
-    dest_lng        REAL NOT NULL,
-    distance_meters INTEGER,
-    duration_secs   INTEGER,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+-- Log de detecções (para tuning / debugging)
+CREATE TABLE perception_logs (
+    id          BIGSERIAL PRIMARY KEY,
+    session_id  UUID NOT NULL,
+    user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+    frame_ts    TIMESTAMPTZ NOT NULL,
+    detections  JSONB NOT NULL,           -- { lanes: [...], objects: [...] }
+    latency_ms  INTEGER,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+) PARTITION BY RANGE (created_at);
+-- Particionamento diário, manter 7 dias de logs
 ```
 
 ---
 
-## 🚀 MACRO FASES DE IMPLEMENTAÇÃO
+## 🚀 Fases de Implementação Evoluídas
 
-### Fase 0 — Fundação e Setup
-Setup completo do ambiente, monorepo, Docker, CI/CD.
-
-### Fase 1 — Mapa Base + Rota
-Mapa 2D funcional com busca de endereço e rota calculada plotada.
-
-### Fase 2 — Navegação 3D Turn-by-Turn
-Modo navegação com perspectiva 3D, GPS tracking, HUD, voz e recalculo.
-
-### Fase 3 — Autenticação + Favoritos
-Login Google/Apple, salvar locais e rotas, API REST com JWT.
-
-### Fase 4 — Tráfego em Tempo Real
-Overlay de tráfego, congestionamento colorido, recalculo considerando tráfego.
-
-### Fase 5 — PWA + Polimento
-Instalação como app, service worker, performance, testes E2E.
+> As Fases 0–5 do p2.md permanecem **idênticas e válidas**. As fases abaixo são **adicionadas**.
 
 ---
 
-## 🔬 MICRO IMPLEMENTAÇÕES (Detalhado por Fase)
+### FASE 6 — Camera Stream + Percepção On-Device (MVP Vision)
+
+**M6.1 — Hook `useCameraStream`**
+- `navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 15, facingMode: 'environment' } })`
+- Retorna `MediaStream` + `HTMLVideoElement` ref
+- Controle: `start()` / `stop()` / estado `{ streaming, error }`
+- Verificar suporte do browser antes de ativar
+- **Testes:** `useCameraStream.test.ts`:
+  - `test_starts_stream_successfully` — mock `getUserMedia`
+  - `test_returns_error_when_permission_denied`
+  - `test_stops_stream_tracks_on_stop`
+  - `test_returns_not_supported_when_api_unavailable`
+
+**M6.2 — Web Workers: carregamento dos modelos ONNX**
+- `laneDetectionWorker.ts`: carrega `ufld_v2.onnx` via `ort.InferenceSession.create()`
+- `objectDetectionWorker.ts`: carrega `yolov8n.onnx`
+- `depthWorker.ts`: carrega `midas_small_int8.onnx`
+- Comunicação via `Comlink` (proxy assíncrono entre main thread e worker)
+- Estratégia de carregamento: lazy (só carrega quando Vision Mode ativo)
+- **Testes:** `*.worker.test.ts`:
+  - `test_loads_model_on_init` — mock `ort.InferenceSession`
+  - `test_returns_inference_result`
+  - `test_handles_model_load_failure`
+
+**M6.3 — Frame capture pipeline**
+- Utilitário `captureFrame(videoEl: HTMLVideoElement): ImageData`
+- Canvas offscreen → `drawImage` → `getImageData`
+- Normalize + reshape para tensor input de cada modelo
+- Throttle: processa apenas 1 frame a cada 66ms (~15fps)
+- **Testes:** `frameCapture.test.ts`:
+  - `test_captures_image_data_from_video`
+  - `test_throttles_to_15fps`
+  - `test_preprocesses_tensor_correctly`
+
+**M6.4 — Lane Detection (UFLD)**
+- Input: tensor `[1, 3, 288, 800]` (RGB normalizado)
+- Output: lista de polilíneas `[{ points: [{x,y}], type: 'solid'|'dashed'|'boundary' }]`
+- Post-processing: filtrar confiança < 0.5, interpolar pontos
+- **Testes:** `laneDetectionWorker.test.ts`:
+  - `test_returns_lane_polylines`
+  - `test_filters_low_confidence_lanes`
+  - `test_handles_no_lanes_detected`
+  - `test_classifies_solid_vs_dashed`
+
+**M6.5 — Object Detection (YOLOv8n)**
+- Input: tensor `[1, 3, 640, 640]`
+- Output: `[{ class: 'car'|'truck'|'motorcycle'|'person', bbox: {x1,y1,x2,y2}, confidence }]`
+- Post-processing: NMS (Non-Maximum Suppression), filtrar classes irrelevantes
+- **Testes:** `objectDetectionWorker.test.ts`:
+  - `test_detects_cars_in_frame`
+  - `test_applies_nms_correctly`
+  - `test_filters_pedestrians_outside_road_area`
+  - `test_handles_empty_frame`
+
+**M6.6 — Depth Estimation (MiDaS Small)**
+- Input: tensor `[1, 3, 256, 256]`
+- Output: depth map `[256, 256]` com valores relativos (maior = mais longe)
+- Calibração: converter profundidade relativa para metros usando `mount_height_m` do usuário
+- **Testes:** `depthWorker.test.ts`:
+  - `test_returns_depth_map_tensor`
+  - `test_converts_relative_depth_to_meters`
+  - `test_handles_uniform_surface_correctly`
+
+**M6.7 — Fusão de percepção: 2D → 3D**
+- Utilitário `projectToWorld(bbox_center: {x,y}, depth_m: number, calibration): Vec3`
+- Fórmula de projeção perspectiva inversa:
+  ```
+  X = (x - cx) * depth / fx
+  Y = (y - cy) * depth / fy
+  Z = depth
+  ```
+  onde `cx, cy` = centro da imagem, `fx, fy` = focal length
+- Output: posição 3D relativa ao carro `(X, Y, Z)` em metros
+- **Testes:** `projectionUtils.test.ts`:
+  - `test_projects_center_point_correctly`
+  - `test_projects_left_point_to_negative_X`
+  - `test_depth_maps_to_Z_axis`
+  - `test_handles_zero_depth`
+
+**M6.8 — Store Zustand: `usePerceptionStore`**
+- Estado: `{ lanes: Lane[], vehicles: Vehicle[], isActive: boolean }`
+- `Vehicle: { id, position3d: Vec3, class, distance_m, confidence }`
+- `Lane: { points3d: Vec3[], type }`
+- Atualiza a 15fps via `requestAnimationFrame`
+- **Testes:** `usePerceptionStore.test.ts`:
+  - `test_updates_lanes_on_new_detection`
+  - `test_updates_vehicles_on_new_detection`
+  - `test_clears_state_when_deactivated`
 
 ---
 
-### FASE 0 — Fundação e Setup
+### FASE 7 — Renderização 3D Sintética (NavSP Vision Scene)
 
-**M0.1 — Estrutura do monorepo**
-- Criar estrutura de diretórios `navsp/frontend` e `navsp/backend`
-- Inicializar Git com `.gitignore` para Python e Node
-- Criar `README.md` com instruções de setup
+**M7.1 — Canvas Three.js: `<SyntheticScene />`**
+- `<Canvas>` do React Three Fiber (canvas WebGL separado do MapLibre)
+- Câmera virtual: `PerspectiveCamera` com `position={[0, 3, -8]}` (3m acima, 8m atrás do carro)
+- Iluminação: `AmbientLight` (0.4) + `DirectionalLight` (0.8, de cima)
+- Background: `#0D0D1A` (azul escuro noturno) ou `#1A1A1A` (cinza diurno, baseado na hora)
+- **Testes:** `SyntheticScene.test.tsx`:
+  - `test_renders_canvas_element`
+  - `test_applies_dark_background`
+  - `test_camera_position_is_behind_vehicle`
 
-**M0.2 — Scaffold do frontend**
-- `npm create vite@latest frontend -- --template react-ts`
-- Instalar dependências: `maplibre-gl`, `react-maplibre`, `deck.gl`, `tailwindcss`, `zustand`, `@tanstack/react-query`
-- Configurar TailwindCSS + PostCSS
-- Configurar `vite-plugin-pwa` (Workbox)
-- Configurar aliases de path (`@/components`, `@/hooks`, etc.)
+**M7.2 — `<RoadSurface />`**
+- `PlaneGeometry(20, 80)` rotacionado em X (horizontal) — representa o asfalto à frente
+- Material: `MeshStandardMaterial({ color: '#1A1A2E', roughness: 0.9 })`
+- Faixas brancas pintadas diretamente na textura (procedural)
+- Atualiza perspectiva baseado no heading GPS (rotaciona a cena conforme curvas)
+- **Testes:** `RoadSurface.test.tsx`:
+  - `test_renders_plane_geometry`
+  - `test_applies_road_color`
+  - `test_rotates_with_vehicle_heading`
 
-**M0.3 — Scaffold do backend**
-- Criar `backend/` com estrutura FastAPI
-- `requirements.txt`: `fastapi`, `uvicorn[standard]`, `sqlalchemy`, `alembic`, `authlib`, `python-jose[cryptography]`, `httpx`, `pydantic[email]`, `python-dotenv`
-- Criar `app/main.py` com FastAPI, CORS configurado para dev
-- Criar `app/core/config.py` com `pydantic-settings`
+**M7.3 — `<LaneLines />` (faixas detectadas)**
+- Para cada `Lane` do `usePerceptionStore`:
+  - Cria `TubeGeometry` ou `LineSegments` seguindo os `points3d`
+  - Cor: `#FFFFFF` (faixa sólida) | `#FFDD00` (tracejada) | `#FF4444` (guia/limite)
+  - Largura: 0.12m simulada via tube geometry
+- Animação suave: interpola posição entre frames (lerp 0.3)
+- **Testes:** `LaneLines.test.tsx`:
+  - `test_renders_one_mesh_per_lane`
+  - `test_applies_white_color_for_solid`
+  - `test_applies_yellow_for_dashed`
+  - `test_applies_red_for_boundary`
+  - `test_interpolates_position_smoothly`
 
-**M0.4 — Banco de dados e migrations**
-- Configurar `app/core/database.py` com SQLAlchemy + SQLite async
-- Criar models: `User`, `FavoritePlace`, `FavoriteRoute`
-- Configurar Alembic com `alembic init`
-- Criar primeira migration: `alembic revision --autogenerate -m "initial"`
-- Rodar migration: `alembic upgrade head`
+**M7.4 — `<VehicleBox />` (outros veículos)**
+- Para cada `Vehicle` do `usePerceptionStore`:
+  - `BoxGeometry(1.8, 1.5, 4.5)` posicionado em `position3d`
+  - Cor por distância:
+    - `distance_m < 10` → `#FF3300` + bloom effect
+    - `distance_m < 30` → `#FFAA00`
+    - `distance_m >= 30` → `#00CC44`
+  - Material: `MeshStandardMaterial({ transparent: true, opacity: 0.8 })`
+  - Escala proporcional à classe (caminhão = 1.5× escala)
+- **Testes:** `VehicleBox.test.tsx`:
+  - `test_renders_box_at_correct_position`
+  - `test_applies_red_color_when_close`
+  - `test_applies_orange_when_medium`
+  - `test_applies_green_when_far`
+  - `test_scales_larger_for_trucks`
 
-**M0.5 — Docker Compose (desenvolvimento)**
-```yaml
-# docker-compose.yml
-services:
-  backend:
-    build: ./backend
-    ports: ["8000:8000"]
-    volumes: ["./backend:/app", "./backend_data:/data"]
-    env_file: .env
-  frontend:
-    build: ./frontend
-    ports: ["5173:5173"]
-    volumes: ["./frontend:/app"]
-```
+**M7.5 — `<Guardrail />` (guard rails e guias)**
+- Detectados como linha de limite (`boundary`) do UFLD
+- `BoxGeometry(0.2, 0.8, comprimento)` ao longo da polilinha da guia
+- Material: `MeshStandardMaterial({ color: '#AAAAAA', metalness: 0.6 })`
+- **Testes:** `Guardrail.test.tsx`:
+  - `test_renders_along_boundary_lane`
+  - `test_applies_metallic_material`
 
-**M0.6 — Variáveis de ambiente**
-- Criar `.env.example` com todas as chaves necessárias:
-  - `DATABASE_URL=sqlite+aiosqlite:///./data/navsp.db`
-  - `SECRET_KEY=`
-  - `GOOGLE_CLIENT_ID=` / `GOOGLE_CLIENT_SECRET=`
-  - `APPLE_CLIENT_ID=` / `APPLE_TEAM_ID=` / `APPLE_KEY_ID=`
-  - `HERE_API_KEY=`
-  - `ORS_API_KEY=` (OpenRouteService)
-  - `FRONTEND_URL=http://localhost:5173`
+**M7.6 — `<EgoVehicle />` (silhueta do carro do usuário)**
+- Silhueta simples do carro (`BoxGeometry(1.8, 1.4, 4.2)`) sempre no centro da cena
+- Cor: `#0066FF` com `wireframe: false`, bordas iluminadas
+- Não se move (câmera virtual é que gira ao redor)
+- **Testes:** `EgoVehicle.test.tsx`:
+  - `test_renders_at_origin`
+  - `test_applies_blue_color`
 
-**M0.7 — GitHub Actions CI**
-- Workflow de CI: lint + type check no frontend (ESLint, tsc)
-- Workflow de CI: lint + tests no backend (ruff, pytest)
-
----
-
-### FASE 1 — Mapa Base + Rota
-
-**M1.1 — Integrar MapLibre GL JS com tiles**
-- Criar componente `<MapView />` com `react-maplibre`
-- Configurar estilo de mapa: `https://tiles.openfreemap.org/styles/liberty` (gratuito)
-- Viewport inicial centrado em São Paulo: `{ lng: -46.6333, lat: -23.5505, zoom: 12 }`
-- Habilitar controles básicos: zoom, bússola, localização
-
-**M1.2 — Busca de endereço (Geocoding)**
-- Criar componente `<SearchBar />` com autocomplete debounced (300ms)
-- Integrar Photon API (`https://photon.komoot.io/api/?q=...&lat=-23.5&lon=-46.6`)
-- Filtrar resultados dentro de bbox de São Paulo/Grande SP
-- Ao selecionar resultado: mover câmera para coordenada
-
-**M1.3 — Input de partida e destino**
-- Criar componente `<RouteInputPanel />` com dois campos: Partida e Destino
-- Campo "Minha localização" como atalho para GPS
-- Estado no Zustand: `originCoords`, `destinationCoords`
-
-**M1.4 — Calcular rota (OpenRouteService)**
-- Backend: criar endpoint `GET /api/v1/proxy/route`
-  - Recebe: `origin`, `destination` (coords)
-  - Chama ORS Directions API: `https://api.openrouteservice.org/v2/directions/driving-car`
-  - Retorna: GeoJSON da rota + steps + distância + duração
-- Frontend: hook `useRoute(origin, destination)` com React Query
-
-**M1.5 — Plotar rota no mapa**
-- Criar layer `route-line` no MapLibre com GeoJSON source
-- Estilo: linha azul sólida, largura 6px, borda branca 8px
-- Animar entrada da rota (fade in)
-
-**M1.6 — Painel de resumo da rota**
-- Componente `<RouteSummary />`: distância (km), tempo estimado (min), botão "Iniciar Navegação"
-- Formatar em PT-BR (ex.: "23 min · 8,4 km")
+**M7.7 — `<SyntheticHUD />` (overlay HTML sobre o canvas 3D)**
+- Distância do veículo mais próximo: "⚠️ 8m" em destaque se < 15m
+- Número de faixas detectadas: "2 faixas"
+- Indicador de status dos modelos: ícone verde/vermelho/carregando
+- **Testes:** `SyntheticHUD.test.tsx`:
+  - `test_shows_nearest_vehicle_distance`
+  - `test_highlights_warning_when_close`
+  - `test_shows_lane_count`
+  - `test_shows_model_loading_indicator`
 
 ---
 
-### FASE 2 — Navegação 3D Turn-by-Turn
+### FASE 8 — Integração Mapa + Visão (Layout Final)
 
-**M2.1 — Geolocation API (GPS do dispositivo)**
-- Hook `useGeolocation()`: `navigator.geolocation.watchPosition()`
-- Estado: `{ lat, lng, speed, heading, accuracy }`
-- Fallback gracioso se permissão negada
+**M8.1 — Split Screen container**
+- Componente `<NavigationLayout />` com dois painéis redimensionáveis
+- Painel superior (60%): `<MapView />` do p2.md (navegação turn-by-turn)
+- Painel inferior (40%): `<SyntheticScene />` (percepção ADAS)
+- Botão toggle para alternar layouts (split / mapa full / visão full)
+- **Testes:** `NavigationLayout.test.tsx`:
+  - `test_renders_both_panels`
+  - `test_toggles_to_map_full`
+  - `test_toggles_to_vision_full`
 
-**M2.2 — Modo de navegação (câmera 3D)**
-- Ao clicar "Iniciar Navegação", ativar modo nav:
-  - `pitch: 60°` (inclinação — estilo Tesla)
-  - `bearing: heading do usuário` (direção do movimento)
-  - `zoom: 17–18` (pista próxima)
-  - `center: posição GPS atual`
-- Câmera segue suavemente a posição GPS (`flyTo` com easing)
-- Botão de saída do modo de navegação
+**M8.2 — Sincronização de heading entre painéis**
+- O heading GPS (p2.md `useGeolocation`) alimenta TANTO o bearing do MapLibre QUANTO a rotação da cena Three.js
+- Zustand store compartilhado: `useNavigationStore.heading`
+- **Testes:** `headingSync.test.ts`:
+  - `test_heading_updates_maplibre_bearing`
+  - `test_heading_updates_threejs_scene_rotation`
+  - `test_both_panels_show_same_heading`
 
-**M2.3 — deck.gl PathLayer (pista em 3D)**
-- Instalar `@deck.gl/react` e `@deck.gl/mapbox`
-- Criar `PathLayer` com a geometria da rota
-  - Largura: 8m, cor azul elétrico `[0, 120, 255]`
-  - Elevação: 2m acima do nível da rua (efeito elevado)
-- `MapboxOverlay` com `interleaved: true`
-
-**M2.4 — Snap na rota (map matching)**
-- Algoritmo de projeção do ponto GPS na polyline mais próxima
-- Calcular qual segmento da rota o usuário está
-- Determinar próxima manobra (next step)
-
-**M2.5 — Painel HUD de manobra antecipada**
-- Componente `<TurnInstruction />` sobreposto no topo do mapa
-- Exibe: ícone de manobra (virar esquerda/direita/reto/retorno) + texto + distância
-- Ícones SVG customizados para cada manobra
-- Antecipação: avisa 300m antes de rodovias, 100m em vias locais
-
-**M2.6 — HUD inferior de status**
-- Componente `<NavigationHUD />` na parte inferior da tela
-- Exibe: velocidade atual (GPS), distância restante, horário de chegada (ETA)
-- Design minimalista, fundo escuro semi-transparente (estilo carro)
-
-**M2.7 — Narração de voz (TTS PT-BR)**
-- Usar `window.speechSynthesis.speak()` — browser nativo, sem custo
-- Voz: `lang: 'pt-BR'`, selecionar voz disponível no dispositivo
-- Narrar: "Em 300 metros, vire à direita na Avenida Paulista"
-- Fila de falas: não sobrepor, cancelar anterior ao falar novo
-
-**M2.8 — Toggle de voz**
-- Botão de microfone no HUD (ícone muted/unmuted)
-- Estado salvo em `localStorage` (persiste entre sessões)
-
-**M2.9 — Detecção de desvio e recalculo**
-- Se distância do ponto GPS para a rota > 50m por 3 segundos
-- Exibir toast: "Recalculando rota…"
-- Chamar novamente endpoint de rota com nova origem (posição atual)
-- Atualizar rota no mapa animatamente
+**M8.3 — Detecção de veículos à frente no mapa**
+- Veículos detectados pela câmera com distância < 50m → criar marcador temporário no MapLibre
+- Calcular GPS do veículo usando: `GPS_atual + offset(heading, distância)`
+- Exibir como ícone 🚗 no mapa de navegação
+- **Testes:** `vehicleMapMarker.test.ts`:
+  - `test_creates_marker_for_nearby_vehicles`
+  - `test_calculates_gps_offset_correctly`
+  - `test_removes_marker_when_vehicle_disappears`
 
 ---
 
-### FASE 3 — Autenticação + Favoritos
+### FASE 9 — Backend Vision Service (fallback para celulares fracos)
 
-**M3.1 — Backend: OAuth2 Google**
-- Endpoint `GET /api/v1/auth/google` → redireciona para Google
-- Endpoint `GET /api/v1/auth/google/callback` → troca code por token
-- Criar/atualizar usuário no banco
-- Retornar JWT próprio (access token + refresh token)
+**M9.1 — WebSocket endpoint no backend**
+- `WS /ws/vision` (FastAPI WebSocket)
+- Recebe: frames JPEG comprimidos (base64 ou binary)
+- Processa: pipeline ONNX (lane + yolo + midas)
+- Retorna: JSON com `{ lanes, vehicles, latency_ms }`
+- Rate limit: máx 15fps por conexão
+- **Testes:** `test_vision_ws.py`:
+  - `test_websocket_accepts_connection`
+  - `test_processes_frame_and_returns_detections`
+  - `test_rate_limits_to_15fps`
+  - `test_returns_error_on_invalid_frame`
 
-**M3.2 — Backend: Apple Sign-In**
-- Endpoint `GET /api/v1/auth/apple`
-- Endpoint `POST /api/v1/auth/apple/callback` (Apple usa POST)
-- Validar identity token JWT da Apple
-- Criar/atualizar usuário no banco
+**M9.2 — Detector de faixas (backend Python)**
+- Classe `LaneDetector(model_path: str)`
+- `detect(frame: np.ndarray) -> List[Lane]`
+- Usa `onnxruntime.InferenceSession`
+- **Testes:** `test_lane_detector.py`:
+  - `test_loads_model_successfully`
+  - `test_returns_lanes_for_valid_frame`
+  - `test_handles_empty_frame`
+  - `test_filters_low_confidence`
 
-**M3.3 — Backend: JWT middleware**
-- Middleware `get_current_user` via FastAPI `Depends()`
-- Validar Bearer token em cada rota protegida
-- Refresh token endpoint: `POST /api/v1/auth/refresh`
+**M9.3 — Detector de objetos (backend Python)**
+- Classe `ObjectDetector(model_path: str)`
+- `detect(frame: np.ndarray) -> List[Detection]`
+- NMS implementado com `cv2.dnn.NMSBoxes`
+- **Testes:** `test_object_detector.py`:
+  - `test_detects_vehicle_in_frame`
+  - `test_applies_nms`
+  - `test_returns_correct_classes`
+  - `test_confidence_threshold_filters`
 
-**M3.4 — Backend: API de Locais Favoritos**
-```
-GET    /api/v1/favorites/places       → listar todos
-POST   /api/v1/favorites/places       → criar novo
-PATCH  /api/v1/favorites/places/{id}  → renomear
-DELETE /api/v1/favorites/places/{id}  → remover
-```
+**M9.4 — Estimador de profundidade (backend Python)**
+- Classe `DepthEstimator(model_path: str)`
+- `estimate(frame: np.ndarray) -> np.ndarray` (depth map float32)
+- **Testes:** `test_depth_estimator.py`:
+  - `test_returns_depth_map_same_dimensions`
+  - `test_depth_values_are_positive`
+  - `test_handles_uniform_color_frame`
 
-**M3.5 — Backend: API de Rotas Favoritas**
-```
-GET    /api/v1/favorites/routes       → listar todas
-POST   /api/v1/favorites/routes       → salvar rota
-DELETE /api/v1/favorites/routes/{id}  → remover
-```
-
-**M3.6 — Frontend: Modal de Login**
-- Componente `<AuthModal />`
-- Botão "Entrar com Google" (estilo oficial)
-- Botão "Entrar com Apple" (estilo oficial)
-- Fluxo: redirect → callback → JWT salvo em `localStorage`
-
-**M3.7 — Frontend: Tela de Favoritos**
-- Aba/tela `<FavoritesScreen />`
-- Seção "Locais Favoritos": lista com ícone + nome + endereço
-- Seção "Rotas Favoritas": origem → destino + distância
-- Ao tocar em favorito: abre no mapa diretamente
-
-**M3.8 — Frontend: Salvar Favorito do Mapa**
-- Ao pressionar longo (long press) em ponto do mapa → modal
-- Opção: "Salvar como local favorito" → abre input de nome
-- Botão de coração no painel de destino para salvar rota
-
----
-
-### FASE 4 — Tráfego em Tempo Real
-
-**M4.1 — Backend: Proxy para HERE Traffic API**
-- Endpoint `GET /api/v1/proxy/traffic`
-- Parâmetros: `bbox` (área visível do mapa)
-- Chama HERE Traffic Flow API v7
-- Retorna GeoJSON com segmentos e jam factor (0–10)
-
-**M4.2 — Overlay de tráfego no mapa**
-- Criar layer `traffic-flow` no MapLibre
-- Colorir segmentos de rua por congestionamento:
-  - 🟢 Verde: fluindo (jam 0–3)
-  - 🟡 Amarelo: lento (jam 4–6)
-  - 🔴 Vermelho: congestionado (jam 7–10)
-- Toggle de tráfego (ligar/desligar overlay)
-- Atualizar a cada 60 segundos (polling)
-
-**M4.3 — Roteamento com tráfego**
-- No endpoint de rota, adicionar parâmetro `avoid_traffic: true`
-- OpenRouteService suporta `avoid_features` mas não tráfego real
-- Estratégia: calcular rota alternativa quando HERE detectar jam > 7 na rota atual
-- Oferecer ao usuário: "Há uma rota mais rápida. Deseja recalcular?"
-
-**M4.4 — Alertas de incidentes**
-- Chamar HERE Traffic Incidents API
-- Exibir ícones de incidente no mapa (acidente, obra, bloqueio)
-- Toast de alerta: "Acidente à frente na Marginal Pinheiros"
+**M9.5 — Frame processor (pipeline completo)**
+- Classe `FrameProcessor(lane, object, depth detectors)`
+- `process(jpeg_bytes: bytes) -> PerceptionResult`
+- Roda os 3 modelos e fusiona os resultados
+- **Testes:** `test_frame_processor.py`:
+  - `test_processes_full_pipeline`
+  - `test_fuses_depth_with_detections`
+  - `test_returns_latency_measurement`
+  - `test_handles_corrupt_jpeg`
 
 ---
 
-### FASE 5 — PWA + Polimento
+## ⚠️ Limitações e Considerações Importantes
 
-**M5.1 — Web App Manifest**
-- `manifest.webmanifest`: nome, ícones 192x192 e 512x512, `theme_color`, `display: standalone`
-- Splash screen para iOS e Android
+### Limitações Técnicas
 
-**M5.2 — Service Worker (Workbox)**
-- Cache de assets estáticos (JS, CSS, fontes)
-- Cache de tiles do mapa (stale-while-revalidate)
-- Cache de resposta do backend (favoritos)
-
-**M5.3 — Prompt de instalação**
-- Capturar evento `beforeinstallprompt`
-- Exibir banner: "Adicionar NavSP à tela inicial"
-- Para iOS: instrução manual com botão de compartilhar
-
-**M5.4 — Performance**
-- Code splitting por rota (lazy loading de telas)
-- Preload de fontes e ícones críticos
-- Bundle analyzer (`rollup-plugin-visualizer`)
-- Lighthouse audit: score > 90 em Performance e PWA
-
-**M5.5 — Testes**
-- **Frontend**: Vitest + React Testing Library (unit + integration)
-  - Testar: cálculo de rota, detecção de desvio, store de favoritos
-- **Backend**: Pytest + httpx AsyncClient
-  - Testar: endpoints de favoritos, auth JWT, proxy de rota
-- **E2E**: Playwright
-  - Fluxo: buscar endereço → calcular rota → iniciar navegação → desviar → recalcular
-
----
-
-## 🌐 Opções de Deploy
-
-### Opção 1 — Simples e Barato (Recomendado para MVP)
-| Componente | Serviço | Custo |
+| Limitação | Impacto | Mitigação |
 |---|---|---|
-| Frontend (PWA) | Vercel / Netlify | Grátis |
-| Backend (FastAPI) | Railway / Render | Grátis–$5/mês |
-| Banco (SQLite) | Incluso no backend (volume) | Grátis |
+| Celular pode superaquecer com inferência contínua | Degradação de performance | Reduzir para 10fps, pausar se temp > threshold |
+| Precisão do depth monocular é ~15–30% de erro | Distâncias imprecisas | Mostrar range (ex: "8–12m") em vez de valor exato |
+| UFLD pode falhar em vias sem marcação (comum em SP) | Faixas não detectadas | Fallback: mostrar apenas asfalto e veículos |
+| YOLO nano tem menor precisão que modelos grandes | Falsos positivos/negativos | Threshold de confiança ≥ 0.5, múltiplos frames |
+| getUserMedia não disponível em todos browsers | Sem câmera = sem Vision Mode | Feature detection + graceful degradation |
+| Câmera traseira do celular ≠ câmera ADAS de carro | Ângulo de visão diferente | Calibração manual de altura e pitch |
 
-**Prós:** Setup em minutos, SSL automático, CI/CD integrado  
-**Contras:** SQLite em serviço gerenciado pode ter limitações de volume persistente
+### Considerações Legais / Segurança
 
-### Opção 2 — VPS Dedicada (Produção)
-| Componente | Serviço | Custo |
-|---|---|---|
-| Tudo | Hetzner CX21 (2vCPU, 4GB) | ~€5/mês |
-| Self-hosted OSRM (futuro) | Hetzner CPX41 (8vCPU, 16GB) | ~€30/mês |
+> ⚠️ **AVISO IMPORTANTE:** Este sistema é uma **ferramenta de visualização experimental**, NÃO um sistema de segurança ADAS certificado. Não deve ser usado para tomada de decisões de segurança de trânsito. Exibir aviso explícito ao usuário na primeira ativação do Vision Mode.
 
-**Prós:** Controle total, dados na sua infra, fácil escalar  
-**Contras:** Gerenciar updates de SO, SSL manual (Let's Encrypt)
+### Performance Target
 
-### Opção 3 — Docker Compose (On-premise / Self-hosted total)
-- Rodar tudo em servidor próprio com Docker Compose
-- Nginx como reverse proxy
-- Certbot para SSL
-- Ideal para: dados sensíveis, compliance, LGPD
+| Métrica | Target |
+|---|---|
+| Pipeline de percepção (on-device) | < 80ms por frame |
+| Re-render Three.js | < 16ms (60fps) |
+| Latência WebSocket (backend mode) | < 120ms |
+| Consumo de bateria (1h de uso) | < 30% (celular moderno) |
+| RAM usada pelos modelos ONNX | < 150MB |
 
 ---
 
-## 📋 Dependências entre Tarefas
+## 🔬 MICRO IMPLEMENTAÇÕES — Resumo das Fases Novas
+
+| Fase | Itens | Prioridade |
+|---|---|---|
+| Fase 6 — Camera + Percepção On-Device | M6.1 – M6.8 | Alta (MVP Vision) |
+| Fase 7 — Renderização 3D Sintética | M7.1 – M7.7 | Alta (MVP Vision) |
+| Fase 8 — Integração Mapa + Visão | M8.1 – M8.3 | Média |
+| Fase 9 — Backend Vision (fallback) | M9.1 – M9.5 | Baixa (para celulares fracos) |
+
+---
+
+## 📋 Dependências entre as Fases Novas
 
 ```
-M0.1 → M0.2, M0.3
-M0.3 → M0.4
-M0.2, M0.4 → M0.5
-M0.5 → M1.1
-M1.1 → M1.2, M1.3
-M1.2, M1.3 → M1.4
-M1.4 → M1.5, M1.6
-M1.5, M1.6 → M2.1
-M2.1 → M2.2, M2.3
-M2.2, M2.3 → M2.4
-M2.4 → M2.5, M2.6, M2.7, M2.8, M2.9
-M0.3, M0.4 → M3.1, M3.2
-M3.1, M3.2 → M3.3
-M3.3 → M3.4, M3.5
-M3.4, M3.5 → M3.6, M3.7, M3.8
-Fase 2 completa → M4.1
-M4.1 → M4.2, M4.3, M4.4
-Fase 3, Fase 4 completas → Fase 5
+Fase 0–5 (p2.md) → obrigatório antes de qualquer fase nova
+       │
+       ├──► M6.1 (useCameraStream) → M6.2 (workers) → M6.3 (frame capture)
+       │         │
+       │         ├──► M6.4 (lane) ─┐
+       │         ├──► M6.5 (yolo) ─┤──► M6.7 (fusão 3D) → M6.8 (store)
+       │         └──► M6.6 (depth)─┘
+       │                                     │
+       └──► M7.1 (canvas) ──────────────────►├──► M7.2 (road) → M7.3 (lanes) → M7.4 (vehicles) → M7.5 (guardrails)
+                                              │
+                                         M7.6 (ego) + M7.7 (HUD)
+                                              │
+                                         M8.1 (split screen) → M8.2 (heading sync) → M8.3 (markers)
+                                              │
+                                         M9.1–M9.5 (backend fallback — independente)
 ```
 
 ---
 
-## 🔑 Chaves de API Necessárias para Registrar
+## 🏁 Resumo Executivo
 
-1. **HERE Developer** → Traffic API: https://developer.here.com (free tier: 250k trans/mês)
-2. **OpenRouteService** → Routing: https://openrouteservice.org/dev/#/signup (free: 2k req/dia)
-3. **Google Cloud Console** → OAuth2: https://console.cloud.google.com (Google Sign-In)
-4. **Apple Developer** → Sign In with Apple: https://developer.apple.com ($99/ano necessário)
-5. **Maptiler** (opcional) → Tiles alternativos: https://maptiler.com/cloud (free: 100k/mês)
-
-> OpenFreeMap (tiles) e Nominatim/Photon (geocoding) **não requerem registro**.
-
----
-
-## ⚠️ Riscos e Mitigações
-
-| Risco | Impacto | Mitigação |
-|---|---|---|
-| ORS rate limit (2k req/dia) | Alto em produção | Migrar para OSRM self-hosted ou GraphHopper |
-| HERE Traffic coverage em SP | Médio | Testar cobertura antes de depender |
-| Apple Sign-In: $99/ano developer | Médio | Lançar MVP só com Google, adicionar Apple depois |
-| SQLite em produção (concorrência) | Médio | Migrar para PostgreSQL se >10 usuários simultâneos |
-| GPS impreciso em cânions urbanos (SP) | Alto | Implementar Kalman filter ou suavização de posição |
-| Permissão de localização negada | Alto | UX clara explicando necessidade, modo manual como fallback |
+| Pergunta | Resposta |
+|---|---|
+| O plano p2.md funciona para navegação estilo Google Maps? | **✅ Sim, totalmente** — MapLibre 3D + GPS + HUD + voz + rerouting já cobrem isso |
+| Como o usuário navega a rota enquanto dirige? | **GPS feed → bearing/pitch no MapLibre → câmera 3D segue o carro suavemente** |
+| Como desenhar a rua, guias, calçadas e veículos em tempo real? | **Câmera ADAS (celular) → ONNX models → detecções 3D → Three.js scene** |
+| Como funciona sem mostrar a imagem real da câmera? | **Detecções → geometrias 3D coloridas (boxes, planes, tubes) — estilo Tesla/simulador** |
+| Qual câmera usar? | **MVP: câmera do celular via getUserMedia; futuro: câmera ADAS dedicada** |
+| On-device ou backend? | **Preferência on-device (privacidade + latência); backend como fallback** |
+| Mudança na stack do p2.md? | **Adiciona: Three.js + R3F + ONNX Runtime Web + vision-service Python** |
