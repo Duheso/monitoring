@@ -23,6 +23,9 @@ import ServicesCard   from './components/ServicesCard'
 import JournalCard    from './components/JournalCard'
 import OllamaPSCard   from './components/OllamaPSCard'
 import RaidDiskCard  from './components/RaidDiskCard'
+import DockerCard     from './components/DockerCard'
+import DockerLogsCard from './components/DockerLogsCard'
+import VllmCard       from './components/VllmCard'
 
 // ── Card definitions ──────────────────────────────────────────────────────────
 export const CARD_DEFS = {
@@ -39,10 +42,13 @@ export const CARD_DEFS = {
   services:  { label: 'Services',        singleton: true,  defaultH: 10, defaultW: 4 },
   journal:   { label: 'Journal',         singleton: false, defaultH: 12, defaultW: 4 },
   ollamaps:  { label: 'Ollama PS',        singleton: true,  defaultH: 8,  defaultW: 6 },
+  docker:    { label: 'Docker',          singleton: true,  defaultH: 14, defaultW: 6 },
+  dockerlogs:{ label: 'Docker Logs',     singleton: false, defaultH: 12, defaultW: 4 },
+  vllm:      { label: 'vLLM',            singleton: true,  defaultH: 16, defaultW: 6 },
   // singlegpu-{N} are added dynamically
 }
 
-const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','disk_raid1','disk_raid2','network','gpus','gpuproc','processes','services','ollamaps']
+const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','disk_raid1','disk_raid2','network','gpus','gpuproc','processes','services','ollamaps','docker','vllm']
 
 const DEFAULT_INSTANCES = ['system','cpu','mem','disk','network','gpus','processes','services','journal-default']
 
@@ -168,12 +174,15 @@ function Dashboard({ authUser, token, logout }) {
   // ── Card management ─────────────────────────────────────────────────────────
   const addCard = useCallback((typeOrId) => {
     const isJournal = typeOrId === 'journal'
+    const isDockerLogs = typeOrId === 'dockerlogs'
     const isSingleGPU = typeOrId.startsWith('singlegpu-')
     const isGpuProc   = typeOrId === 'gpuproc'
 
     let id
     if (isJournal) {
       id = `journal-${genId()}`
+    } else if (isDockerLogs) {
+      id = `dockerlogs-${genId()}`
     } else {
       id = typeOrId // singleton IDs are their own type
     }
@@ -223,7 +232,10 @@ function Dashboard({ authUser, token, logout }) {
     if (id === 'processes') return <ProcessesCard data={metrics?.processes} />
     if (id === 'services')  return <ServicesCard />
     if (id === 'ollamaps')  return <OllamaPSCard data={metrics?.ollama_ps} />
+    if (id === 'docker')    return <DockerCard data={metrics?.docker_containers} history={hist} />
+    if (id === 'vllm')      return <VllmCard data={metrics?.vllm_metrics} history={hist} />
     if (id.startsWith('journal-'))   return <JournalCard instanceId={id} onClose={instances.filter(x => x.startsWith('journal-')).length > 1 ? () => removeCard(id) : null} />
+    if (id.startsWith('dockerlogs-')) return <DockerLogsCard instanceId={id} onClose={() => removeCard(id)} />
     if (id.startsWith('singlegpu-')) {
       const idx = parseInt(id.replace('singlegpu-', ''), 10)
       return <SingleGPUCard gpuIndex={idx} data={metrics} history={hist} onClose={() => removeCard(id)} />

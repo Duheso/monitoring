@@ -1,5 +1,4 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse, StreamingResponse
@@ -22,10 +21,10 @@ from fastapi import Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from .auth import create_access_token, verify_token, authenticate_pam
+from .config import data_dir, layouts_dir, services_file, get_current_user, PROJECT_ROOT
 
 # Load .env from project root
-_project_root = Path(__file__).resolve().parents[2]
-load_dotenv(_project_root / '.env')
+load_dotenv(PROJECT_ROOT / '.env')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('monitor')
@@ -40,21 +39,8 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-# ── Auth dependency ───────────────────────────────────────────────────────────
-_bearer = HTTPBearer(auto_error=False)
-
-async def get_current_user(
-    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-    token: Optional[str] = Query(default=None),
-) -> str:
-    raw = (creds.credentials if creds else None) or token or ''
-    user = verify_token(raw)
-    if not user:
-        raise HTTPException(status_code=401, detail='Invalid or expired token')
-    return user
-
 # ── Static files ───────────────────────────────────────────────────────────────
-static_dir = Path(__file__).resolve().parents[2] / 'frontend' / 'dist'
+static_dir = PROJECT_ROOT / 'frontend' / 'dist'
 if static_dir.exists():
     assets_dir = static_dir / 'assets'
     if assets_dir.exists():
@@ -83,32 +69,6 @@ def init_psutil():
 
 
 init_psutil()
-
-# ── Runtime data directory ────────────────────────────────────────────────────
-# Resolved from DATA_DIR env var, then project ./backend_data, then system fallbacks
-def _resolve_data_dir() -> Path:
-    env_dir = os.getenv('DATA_DIR', '').strip()
-    if env_dir:
-        p = Path(env_dir)
-        p.mkdir(parents=True, exist_ok=True)
-        return p
-    candidates = [
-        _project_root / 'backend_data',
-        Path('/var/lib/dgx-monitor'),
-        Path('/tmp/dgx-monitor'),
-    ]
-    for p in candidates:
-        try:
-            p.mkdir(parents=True, exist_ok=True)
-            return p
-        except PermissionError:
-            continue
-    raise RuntimeError('Cannot create a writable data directory')
-
-data_dir      = _resolve_data_dir()
-layouts_dir   = data_dir / 'layouts'
-layouts_dir.mkdir(exist_ok=True)
-services_file = data_dir / 'services.json'
 
 # ── In-memory metrics history (circular buffer ~5 min @ 1 Hz) ─────────────────
 HISTORY_MAX = 300
@@ -801,9 +761,151 @@ def collect_metrics() -> dict:
         'network':     network,
         'system':      system_info,
         'ollama_ps':   ollama_ps,
+        'docker_containers': collect_docker_stats(),
+        'vllm_metrics': collect_vllm_metrics(),
     }
     metrics_history.append(snapshot)
     return snapshot
+
+
+# ── Docker container stats (for WebSocket snapshot) ──────────────────────────
+def collect_docker_stats() -> list:
+    """Collect stats for all monitored Docker containers."""
+    try:
+        from .docker_api.helpers import load_containers, load_hosts, get_docker_client
+        monitored = load_containers()
+        if not monitored:
+            return []
+        hosts = {h['id']: h for h in load_hosts()}
+        results = []
+        _client_cache = {}
+        for mc in monitored:
+            host = hosts.get(mc.get('host_id'))
+            if not host:
+                results.append({
+                    'id': mc['id'], 'name': mc['container_name'],
+                    'host_id': mc.get('host_id', ''), 'host_name': 'unknown',
+                    'status': 'error', 'error': 'host not found',
+                })
+                continue
+            try:
+                hid = host['id']
+                if hid not in _client_cache:
+                    _client_cache[hid] = get_docker_client(host)
+                client = _client_cache[hid]
+                container = client.containers.get(mc['container_name'])
+                info = {
+                    'id': mc['id'],
+                    'name': mc['container_name'],
+                    'host_id': hid,
+                    'host_name': host.get('name', host.get('host', 'unknown')),
+                    'status': container.status,
+                    'image': str(container.image.tags[0]) if container.image.tags else str(container.image.short_id),
+                    'created': container.attrs.get('Created', ''),
+                }
+                if container.status == 'running':
+                    try:
+                        stats = container.stats(stream=False)
+                        cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
+                        sys_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
+                        n_cpus = stats['cpu_stats'].get('online_cpus', len(stats['cpu_stats']['cpu_usage'].get('percpu_usage', [1])))
+                        cpu_pct = (cpu_delta / sys_delta * n_cpus * 100.0) if sys_delta > 0 else 0.0
+                        mem_usage = stats['memory_stats'].get('usage', 0) - stats['memory_stats'].get('stats', {}).get('cache', 0)
+                        mem_limit = stats['memory_stats'].get('limit', 0)
+                        nets = stats.get('networks', {})
+                        net_rx = sum(v.get('rx_bytes', 0) for v in nets.values())
+                        net_tx = sum(v.get('tx_bytes', 0) for v in nets.values())
+                        blk = stats.get('blkio_stats', {}).get('io_service_bytes_recursive', []) or []
+                        blk_read = sum(e.get('value', 0) for e in blk if e.get('op') == 'read')
+                        blk_write = sum(e.get('value', 0) for e in blk if e.get('op') == 'write')
+                        info.update({
+                            'cpu_percent': round(cpu_pct, 2),
+                            'mem_usage': mem_usage,
+                            'mem_limit': mem_limit,
+                            'mem_percent': round(mem_usage / mem_limit * 100, 2) if mem_limit > 0 else 0,
+                            'net_rx': net_rx,
+                            'net_tx': net_tx,
+                            'blk_read': blk_read,
+                            'blk_write': blk_write,
+                        })
+                    except Exception:
+                        pass
+                results.append(info)
+            except Exception as e:
+                results.append({
+                    'id': mc['id'], 'name': mc['container_name'],
+                    'host_id': mc.get('host_id', ''), 'host_name': host.get('name', ''),
+                    'status': 'error', 'error': str(e)[:120],
+                })
+        for c in _client_cache.values():
+            try:
+                c.close()
+            except Exception:
+                pass
+        return results
+    except Exception:
+        return []
+
+
+# ── vLLM metrics (for WebSocket snapshot) ────────────────────────────────────
+def collect_vllm_metrics() -> list:
+    """Collect metrics for all registered vLLM instances."""
+    try:
+        from .vllm_api.helpers import load_instances
+        import httpx
+        instances = load_instances()
+        if not instances:
+            return []
+        results = []
+        for inst in instances:
+            entry = {'id': inst['id'], 'name': inst['name'], 'url': inst['url']}
+            # Collect from vLLM /metrics endpoint (Prometheus format)
+            try:
+                r = httpx.get(f"{inst['url']}/metrics", timeout=3)
+                if r.status_code == 200:
+                    entry['raw_metrics'] = _parse_prometheus(r.text)
+                    entry['status'] = 'online'
+                else:
+                    entry['status'] = 'error'
+            except Exception:
+                entry['status'] = 'offline'
+                entry['raw_metrics'] = {}
+
+            # Collect from sidecar
+            sidecar_url = inst.get('sidecar_url', '')
+            if sidecar_url:
+                try:
+                    r = httpx.get(f"{sidecar_url}/metrics", timeout=3)
+                    if r.status_code == 200:
+                        entry['sidecar_metrics'] = r.json()
+                except Exception:
+                    entry['sidecar_metrics'] = {}
+            results.append(entry)
+        return results
+    except Exception:
+        return []
+
+
+def _parse_prometheus(text: str) -> dict:
+    """Parse Prometheus text format into a dict of metric_name -> value(s)."""
+    result = {}
+    for line in text.strip().splitlines():
+        if line.startswith('#') or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            name = parts[0]
+            try:
+                val = float(parts[1])
+            except ValueError:
+                val = parts[1]
+            if name in result:
+                if not isinstance(result[name], list):
+                    result[name] = [result[name]]
+                result[name].append(val)
+            else:
+                result[name] = val
+    return result
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
@@ -842,3 +944,14 @@ def root():
     if index.exists():
         return FileResponse(str(index))
     return {'status': 'DGX Monitor v2 backend running'}
+
+
+# ── Include sub-routers ──────────────────────────────────────────────────────
+from .docker_api import hosts_router, containers_router, networks_router, logs_router
+app.include_router(hosts_router)
+app.include_router(containers_router)
+app.include_router(networks_router)
+app.include_router(logs_router)
+
+from .vllm_api import instances_router as vllm_router
+app.include_router(vllm_router)

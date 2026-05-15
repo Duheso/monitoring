@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  vllm:
+    # Your vLLM container — adjust image and model as needed
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    # command: --model your-model-name --tensor-parallel-size 1
+
+  vllm-sidecar:
+    build: .
+    ports:
+      - "9100:9100"
+    environment:
+      - VLLM_URL=http://vllm:8000
+      - POLL_INTERVAL=5
+      - HISTORY_WINDOW=60
+    depends_on:
+      - vllm
+    restart: unless-stopped

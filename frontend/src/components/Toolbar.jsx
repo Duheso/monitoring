@@ -14,6 +14,8 @@ const SINGLETON_CARDS = [
   { id: 'processes', label: 'Processes' },
   { id: 'services',  label: 'Services' },
   { id: 'ollamaps',  label: 'Ollama PS' },
+  { id: 'docker',    label: 'Docker' },
+  { id: 'vllm',      label: 'vLLM' },
 ]
 
 export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont, authUser, logout, instances, gpus, onAddCard, onToggleCard }) {
@@ -117,6 +119,15 @@ export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont,
               style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', color: '#22c55e', fontSize: 11, marginBottom: 10 }}
             >
               <Plus size={11} /> Add Journal Card
+            </button>
+
+            {/* Docker Logs instances */}
+            <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Docker Logs ({instances.filter(x => x.startsWith('dockerlogs-')).length})</div>
+            <button
+              onClick={() => { onAddCard('dockerlogs'); setShowCards(false) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', color: '#60a5fa', fontSize: 11, marginBottom: 10 }}
+            >
+              <Plus size={11} /> Add Docker Logs Card
             </button>
 
             {/* Individual GPU cards */}
