@@ -38,9 +38,9 @@ export default function VllmCard({ data, history }) {
   // Get live metrics for selected instance
   const liveAll = data ?? []
   const live = liveAll.find(m => m.id === selectedId) || {}
-  const derived = live.raw_metrics || {}
+  // derived is populated directly by the backend from Prometheus data; sidecar enriches if available
   const sidecar = live.sidecar_metrics || {}
-  const siderived = sidecar.derived || {}
+  const siderived = live.derived || sidecar.derived || {}
   const gpus = sidecar.gpus || []
   const model = sidecar.model || {}
   const isOnline = live.status === 'online'
@@ -97,9 +97,9 @@ export default function VllmCard({ data, history }) {
             <span style={{ fontSize: 11, color: isOnline ? '#22c55e' : '#ef4444', fontWeight: 600 }}>
               {isOnline ? 'Online' : (live.status || 'Offline')}
             </span>
-            {model?.id && (
+            {(siderived.model_name || model?.id) && (
               <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 8 }}>
-                Model: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{model.id}</span>
+                Model: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{siderived.model_name || model.id}</span>
               </span>
             )}
           </div>
@@ -114,18 +114,18 @@ export default function VllmCard({ data, history }) {
             {tab === 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  {statBox('Tokens/s', siderived.generation_tokens_per_sec?.toFixed(1) || derived['vllm_avg_generation_throughput_toks_per_s'] || '—', 'var(--accent2)')}
+                  {statBox('Tokens/s', siderived.generation_tokens_per_sec?.toFixed(1) ?? '—', 'var(--accent2)')}
                   {statBox('Running', siderived.num_requests_running?.toFixed(0) ?? '—', '#22c55e')}
                   {statBox('Waiting', siderived.num_requests_waiting?.toFixed(0) ?? '—', '#f59e0b')}
-                  {statBox('KV Cache', `${(siderived.gpu_cache_usage_pct ?? 0).toFixed(0)}%`, siderived.gpu_cache_usage_pct > 80 ? '#ef4444' : 'var(--accent)')}
-                  {statBox('P95 Latency', `${(siderived.p95_e2e_latency ?? 0).toFixed(2)}s`, siderived.p95_e2e_latency > 5 ? '#ef4444' : 'var(--text)')}
+                  {statBox('KV Cache', `${(siderived.gpu_cache_usage_pct ?? 0).toFixed(0)}%`, (siderived.gpu_cache_usage_pct ?? 0) > 80 ? '#ef4444' : 'var(--accent)')}
+                  {statBox('P95 Latency', siderived.p95_e2e_latency ? `${siderived.p95_e2e_latency.toFixed(2)}s` : '—', (siderived.p95_e2e_latency ?? 0) > 5 ? '#ef4444' : 'var(--text)')}
                 </div>
                 {history && history.length > 2 && (
                   <SparkLine
                     data={history}
                     dataKey={(pt) => {
                       const v = (pt.vllm_metrics || []).find(m => m.id === selectedId)
-                      return v?.sidecar_metrics?.derived?.generation_tokens_per_sec ?? 0
+                      return v?.derived?.generation_tokens_per_sec ?? 0
                     }}
                     color="var(--accent)"
                     height={40}
@@ -146,7 +146,7 @@ export default function VllmCard({ data, history }) {
                       {siderived.generation_tokens_per_sec?.toFixed(1) ?? '—'}
                     </div>
                     {history && history.length > 2 && (
-                      <SparkLine data={history} dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.sidecar_metrics?.derived?.generation_tokens_per_sec ?? 0} color="#3b82f6" height={30} gradientId="vllm-gen-tps" />
+                      <SparkLine data={history} dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.derived?.generation_tokens_per_sec ?? 0} color="#3b82f6" height={30} gradientId="vllm-gen-tps" />
                     )}
                   </div>
                   <div>
@@ -155,7 +155,7 @@ export default function VllmCard({ data, history }) {
                       {siderived.prompt_tokens_per_sec?.toFixed(1) ?? '—'}
                     </div>
                     {history && history.length > 2 && (
-                      <SparkLine data={history} dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.sidecar_metrics?.derived?.prompt_tokens_per_sec ?? 0} color="#22c55e" height={30} gradientId="vllm-prompt-tps" />
+                      <SparkLine data={history} dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.derived?.prompt_tokens_per_sec ?? 0} color="#22c55e" height={30} gradientId="vllm-prompt-tps" />
                     )}
                   </div>
                 </div>
@@ -182,8 +182,8 @@ export default function VllmCard({ data, history }) {
                 </div>
 
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>Avg Throughput (vLLM reported)</div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', fontFamily: 'monospace' }}>{siderived.avg_generation_throughput?.toFixed(1) ?? '—'} tok/s</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>Gen Tokens/s (live rate)</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', fontFamily: 'monospace' }}>{siderived.generation_tokens_per_sec?.toFixed(1) ?? '—'} tok/s</div>
                 </div>
               </div>
             )}
@@ -192,19 +192,19 @@ export default function VllmCard({ data, history }) {
             {tab === 2 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {/* KV Cache */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                    <span style={{ color: 'var(--muted)', fontWeight: 600 }}>GPU KV Cache</span>
-                    <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(siderived.gpu_cache_usage_pct ?? 0).toFixed(1)}%</span>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                      <span style={{ color: 'var(--muted)', fontWeight: 600 }}>GPU KV Cache</span>
+                      <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(siderived.gpu_cache_usage_pct ?? 0).toFixed(1)}%</span>
+                    </div>
+                    <GaugeBar value={siderived.gpu_cache_usage_pct ?? 0} warnAt={60} dangerAt={85} />
                   </div>
-                  <GaugeBar value={siderived.gpu_cache_usage_pct ?? 0} warnAt={60} dangerAt={85} />
-                </div>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                    <span style={{ color: 'var(--muted)', fontWeight: 600 }}>CPU Cache</span>
-                    <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(siderived.cpu_cache_usage_pct ?? 0).toFixed(1)}%</span>
-                  </div>
-                  <GaugeBar value={siderived.cpu_cache_usage_pct ?? 0} warnAt={60} dangerAt={85} />
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                      <span style={{ color: 'var(--muted)', fontWeight: 600 }}>CPU Cache</span>
+                      <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(siderived.cpu_cache_usage_pct ?? 0).toFixed(1)}%</span>
+                    </div>
+                    <GaugeBar value={siderived.cpu_cache_usage_pct ?? 0} warnAt={60} dangerAt={85} />
                 </div>
 
                 {/* GPU cards */}
@@ -237,7 +237,7 @@ export default function VllmCard({ data, history }) {
                     <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>KV Cache History</div>
                     <SparkLine
                       data={history}
-                      dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.sidecar_metrics?.derived?.gpu_cache_usage_pct ?? 0}
+                      dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.derived?.gpu_cache_usage_pct ?? 0}
                       color="#f59e0b"
                       height={30}
                       gradientId="vllm-kvcache"
@@ -255,18 +255,18 @@ export default function VllmCard({ data, history }) {
                   {statBox('Running', siderived.num_requests_running?.toFixed(0) ?? '—', '#22c55e')}
                   {statBox('Waiting', siderived.num_requests_waiting?.toFixed(0) ?? '—', '#f59e0b')}
                   {statBox('Total', siderived.total_requests?.toFixed(0) ?? '—', 'var(--text)')}
-                  {statBox('Errors', siderived.total_errors?.toFixed(0) ?? '—', '#ef4444')}
-                  {statBox('Error Rate', `${(siderived.error_rate ?? 0).toFixed(1)}%`, siderived.error_rate > 5 ? '#ef4444' : 'var(--text)')}
+                  {statBox('Preemptions', siderived.num_preemptions?.toFixed(0) ?? '—', '#a78bfa')}
+                  {statBox('Prefix Hit', `${(siderived.prefix_cache_hit_rate ?? 0).toFixed(0)}%`, 'var(--accent)')}
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                    <span style={{ color: 'var(--muted)', fontWeight: 600 }}>Preemptions</span>
-                    <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{siderived.num_preemptions?.toFixed(0) ?? '—'}</span>
+                    <span style={{ color: 'var(--muted)', fontWeight: 600 }}>Generation Tokens Total</span>
+                    <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(siderived.generation_tokens_total ?? 0).toLocaleString()}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                    <span style={{ color: 'var(--muted)', fontWeight: 600 }}>Avg Prompt Throughput</span>
-                    <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{siderived.avg_prompt_throughput?.toFixed(1) ?? '—'} tok/s</span>
+                    <span style={{ color: 'var(--muted)', fontWeight: 600 }}>Prompt Tokens Total</span>
+                    <span style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(siderived.prompt_tokens_total ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
 
@@ -275,7 +275,7 @@ export default function VllmCard({ data, history }) {
                     <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 2 }}>Running Requests History</div>
                     <SparkLine
                       data={history}
-                      dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.sidecar_metrics?.derived?.num_requests_running ?? 0}
+                      dataKey={pt => (pt.vllm_metrics || []).find(m => m.id === selectedId)?.derived?.num_requests_running ?? 0}
                       color="#22c55e"
                       height={30}
                       gradientId="vllm-req-running"

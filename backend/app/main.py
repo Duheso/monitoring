@@ -847,6 +847,77 @@ def collect_docker_stats() -> list:
         return []
 
 
+# ── Prometheus parser (handles vllm: style names with labels) ─────────────────
+def _parse_prometheus(text: str) -> dict:
+    """Parse Prometheus text format.
+    Returns: { metric_name: [ {labels: {k:v,...}, value: float}, ... ] }
+    Metric names may contain colons (vllm:xxx).
+    """
+    import re as _re
+    result: dict = {}
+    for line in text.strip().splitlines():
+        if not line or line.startswith('#'):
+            continue
+        # metric_name{labels} value  OR  metric_name value
+        m = _re.match(
+            r'^([a-zA-Z_:][a-zA-Z0-9_:]*?)(\{[^}]*\})?\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|[+-]?Inf|NaN)\s*$',
+            line
+        )
+        if not m:
+            continue
+        name, labels_str, val_str = m.group(1), m.group(2) or '', m.group(3)
+        try:
+            val = float(val_str)
+        except ValueError:
+            continue
+        labels: dict = {}
+        if labels_str:
+            for lm in _re.finditer(r'(\w+)="([^"]*)"', labels_str):
+                labels[lm.group(1)] = lm.group(2)
+        result.setdefault(name, []).append({'labels': labels, 'value': val})
+    return result
+
+
+def _prom_scalar(parsed: dict, name: str, default: float = 0.0) -> float:
+    """Return the first value for a metric (for gauges with a single label-set)."""
+    entries = parsed.get(name, [])
+    return entries[0]['value'] if entries else default
+
+
+def _prom_sum(parsed: dict, name: str) -> float:
+    """Sum all label variants of a counter (e.g. request_success with multiple reasons)."""
+    return sum(e['value'] for e in parsed.get(name, []))
+
+
+def _prom_histogram_p(parsed: dict, base_name: str, percentile: float) -> float:
+    """Estimate a percentile from Prometheus histogram _bucket entries."""
+    buckets = parsed.get(f'{base_name}_bucket', [])
+    total = _prom_scalar(parsed, f'{base_name}_count')
+    if not buckets or total == 0:
+        return 0.0
+    sorted_b = []
+    for e in buckets:
+        le = e['labels'].get('le', '+Inf')
+        if le == '+Inf':
+            continue
+        try:
+            sorted_b.append((float(le), e['value']))
+        except ValueError:
+            pass
+    sorted_b.sort(key=lambda x: x[0])
+    target = total * percentile
+    for le, count in sorted_b:
+        if count >= target:
+            return le
+    return sorted_b[-1][0] if sorted_b else 0.0
+
+
+# Per-instance state for rate calculations (tokens/s)
+_vllm_prev: dict = {}   # inst_id -> {ts, gen_tokens, prompt_tokens}
+_vllm_cache: dict = {}  # inst_id -> {ts, entry}  — cache 5s to avoid hammering
+_VLLM_CACHE_TTL = 5.0   # seconds
+
+
 # ── vLLM metrics (for WebSocket snapshot) ────────────────────────────────────
 def collect_vllm_metrics() -> list:
     """Collect metrics for all registered vLLM instances."""
@@ -856,22 +927,102 @@ def collect_vllm_metrics() -> list:
         instances = load_instances()
         if not instances:
             return []
-        results = []
-        for inst in instances:
-            entry = {'id': inst['id'], 'name': inst['name'], 'url': inst['url']}
-            # Collect from vLLM /metrics endpoint (Prometheus format)
-            try:
-                r = httpx.get(f"{inst['url']}/metrics", timeout=3)
-                if r.status_code == 200:
-                    entry['raw_metrics'] = _parse_prometheus(r.text)
-                    entry['status'] = 'online'
-                else:
-                    entry['status'] = 'error'
-            except Exception:
-                entry['status'] = 'offline'
-                entry['raw_metrics'] = {}
 
-            # Collect from sidecar
+        now = time.time()
+        results = []
+
+        for inst in instances:
+            iid = inst['id']
+
+            # Return cached result if fresh
+            cached = _vllm_cache.get(iid)
+            if cached and now - cached['ts'] < _VLLM_CACHE_TTL:
+                results.append(cached['entry'])
+                continue
+
+            entry: dict = {'id': iid, 'name': inst['name'], 'url': inst['url']}
+
+            try:
+                r = httpx.get(f"{inst['url']}/metrics", timeout=4)
+                if r.status_code != 200:
+                    entry['status'] = 'error'
+                    entry['derived'] = {}
+                    results.append(entry)
+                    continue
+
+                parsed = _parse_prometheus(r.text)
+                entry['status'] = 'online'
+
+                # ── Rate calculations (tokens/s) ──────────────────────────────
+                gen_total    = _prom_scalar(parsed, 'vllm:generation_tokens_total')
+                prompt_total = _prom_scalar(parsed, 'vllm:prompt_tokens_total')
+                prev = _vllm_prev.get(iid, {})
+                dt = now - prev.get('ts', now)
+                if prev and dt > 0:
+                    gen_tps    = max(0.0, (gen_total - prev.get('gen', gen_total)) / dt)
+                    prompt_tps = max(0.0, (prompt_total - prev.get('prompt', prompt_total)) / dt)
+                else:
+                    gen_tps = prompt_tps = 0.0
+                _vllm_prev[iid] = {'ts': now, 'gen': gen_total, 'prompt': prompt_total}
+
+                # ── Requests ──────────────────────────────────────────────────
+                num_running = _prom_scalar(parsed, 'vllm:num_requests_running')
+                num_waiting = _prom_scalar(parsed, 'vllm:num_requests_waiting')
+                req_success = _prom_sum(parsed, 'vllm:request_success_total')
+
+                # ── KV cache ──────────────────────────────────────────────────
+                kv_cache_pct = _prom_scalar(parsed, 'vllm:kv_cache_usage_perc') * 100
+
+                # ── Latency percentiles ───────────────────────────────────────
+                p50_ttft = _prom_histogram_p(parsed, 'vllm:time_to_first_token_seconds', 0.50)
+                p95_ttft = _prom_histogram_p(parsed, 'vllm:time_to_first_token_seconds', 0.95)
+                p50_e2e  = _prom_histogram_p(parsed, 'vllm:e2e_request_latency_seconds', 0.50)
+                p95_e2e  = _prom_histogram_p(parsed, 'vllm:e2e_request_latency_seconds', 0.95)
+                p99_e2e  = _prom_histogram_p(parsed, 'vllm:e2e_request_latency_seconds', 0.99)
+
+                # ── Prefix cache hit rate ─────────────────────────────────────
+                pc_queries = _prom_scalar(parsed, 'vllm:prefix_cache_queries_total')
+                pc_hits    = _prom_scalar(parsed, 'vllm:prefix_cache_hits_total')
+                prefix_hit_rate = round(pc_hits / pc_queries * 100, 1) if pc_queries > 0 else 0.0
+
+                # ── Model name (from labels) ──────────────────────────────────
+                model_name = ''
+                for entries in parsed.values():
+                    for e in entries:
+                        if 'model_name' in e['labels']:
+                            model_name = e['labels']['model_name']
+                            break
+                    if model_name:
+                        break
+
+                entry['derived'] = {
+                    'generation_tokens_per_sec': round(gen_tps, 2),
+                    'prompt_tokens_per_sec':     round(prompt_tps, 2),
+                    'num_requests_running':      int(num_running),
+                    'num_requests_waiting':      int(num_waiting),
+                    'total_requests':            int(req_success),
+                    'total_errors':              0,
+                    'error_rate':                0.0,
+                    'gpu_cache_usage_pct':       round(kv_cache_pct, 2),
+                    'cpu_cache_usage_pct':       round(_prom_scalar(parsed, 'vllm:cpu_cache_usage_perc') * 100, 2),
+                    'p50_ttft':                  round(p50_ttft, 4),
+                    'p95_ttft':                  round(p95_ttft, 4),
+                    'p50_e2e_latency':           round(p50_e2e, 4),
+                    'p95_e2e_latency':           round(p95_e2e, 4),
+                    'p99_e2e_latency':           round(p99_e2e, 4),
+                    'num_preemptions':           int(_prom_scalar(parsed, 'vllm:num_preemptions_total')),
+                    'prefix_cache_hit_rate':     prefix_hit_rate,
+                    'generation_tokens_total':   int(gen_total),
+                    'prompt_tokens_total':       int(prompt_total),
+                    'model_name':                model_name,
+                }
+
+            except Exception as exc:
+                logger.debug('vLLM metrics error for %s: %s', inst['name'], exc)
+                entry['status'] = 'offline'
+                entry['derived'] = {}
+
+            # Collect from sidecar (optional enrichment)
             sidecar_url = inst.get('sidecar_url', '')
             if sidecar_url:
                 try:
@@ -879,33 +1030,15 @@ def collect_vllm_metrics() -> list:
                     if r.status_code == 200:
                         entry['sidecar_metrics'] = r.json()
                 except Exception:
-                    entry['sidecar_metrics'] = {}
+                    pass
+
+            _vllm_cache[iid] = {'ts': now, 'entry': entry}
             results.append(entry)
+
         return results
-    except Exception:
+    except Exception as exc:
+        logger.debug('collect_vllm_metrics error: %s', exc)
         return []
-
-
-def _parse_prometheus(text: str) -> dict:
-    """Parse Prometheus text format into a dict of metric_name -> value(s)."""
-    result = {}
-    for line in text.strip().splitlines():
-        if line.startswith('#') or not line.strip():
-            continue
-        parts = line.split()
-        if len(parts) >= 2:
-            name = parts[0]
-            try:
-                val = float(parts[1])
-            except ValueError:
-                val = parts[1]
-            if name in result:
-                if not isinstance(result[name], list):
-                    result[name] = [result[name]]
-                result[name].append(val)
-            else:
-                result[name] = val
-    return result
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
