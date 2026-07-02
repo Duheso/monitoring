@@ -16,6 +16,7 @@ const SINGLETON_CARDS = [
   { id: 'ollamaps',  label: 'Ollama PS' },
   { id: 'docker',    label: 'Docker' },
   { id: 'vllm',      label: 'vLLM' },
+  { id: 'vllmtrack', label: 'vLLM Tracking' },
 ]
 
 export default function Toolbar({ themes, fonts, theme, setTheme, font, setFont, authUser, logout, instances, gpus, onAddCard, onToggleCard }) {

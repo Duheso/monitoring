@@ -26,6 +26,7 @@ import RaidDiskCard  from './components/RaidDiskCard'
 import DockerCard     from './components/DockerCard'
 import DockerLogsCard from './components/DockerLogsCard'
 import VllmCard       from './components/VllmCard'
+import VllmTrackingCard from './components/VllmTrackingCard'
 
 // ── Card definitions ──────────────────────────────────────────────────────────
 export const CARD_DEFS = {
@@ -45,10 +46,11 @@ export const CARD_DEFS = {
   docker:    { label: 'Docker',          singleton: true,  defaultH: 14, defaultW: 6 },
   dockerlogs:{ label: 'Docker Logs',     singleton: false, defaultH: 12, defaultW: 4 },
   vllm:      { label: 'vLLM',            singleton: true,  defaultH: 16, defaultW: 6 },
+  vllmtrack: { label: 'vLLM Tracking',   singleton: true,  defaultH: 14, defaultW: 6 },
   // singlegpu-{N} are added dynamically
 }
 
-const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','disk_raid1','disk_raid2','network','gpus','gpuproc','processes','services','ollamaps','docker','vllm']
+const STATIC_SINGLETON_IDS = ['system','cpu','mem','disk','disk_raid1','disk_raid2','network','gpus','gpuproc','processes','services','ollamaps','docker','vllm','vllmtrack']
 
 const DEFAULT_INSTANCES = ['system','cpu','mem','disk','network','gpus','processes','services','journal-default']
 
@@ -234,6 +236,7 @@ function Dashboard({ authUser, token, logout }) {
     if (id === 'ollamaps')  return <OllamaPSCard data={metrics?.ollama_ps} />
     if (id === 'docker')    return <DockerCard data={metrics?.docker_containers} history={hist} />
     if (id === 'vllm')      return <VllmCard data={metrics?.vllm_metrics} history={hist} />
+    if (id === 'vllmtrack') return <VllmTrackingCard data={metrics?.vllm_metrics} history={hist} />
     if (id.startsWith('journal-'))   return <JournalCard instanceId={id} onClose={instances.filter(x => x.startsWith('journal-')).length > 1 ? () => removeCard(id) : null} />
     if (id.startsWith('dockerlogs-')) return <DockerLogsCard instanceId={id} onClose={() => removeCard(id)} />
     if (id.startsWith('singlegpu-')) {

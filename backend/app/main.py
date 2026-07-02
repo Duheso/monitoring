@@ -884,9 +884,12 @@ def _prom_scalar(parsed: dict, name: str, default: float = 0.0) -> float:
     return entries[0]['value'] if entries else default
 
 
-def _prom_sum(parsed: dict, name: str) -> float:
-    """Sum all label variants of a counter (e.g. request_success with multiple reasons)."""
-    return sum(e['value'] for e in parsed.get(name, []))
+def _prom_sum(parsed: dict, name: str, label_filter: dict = None) -> float:
+    """Sum all label variants of a counter. If label_filter, only sum matching entries."""
+    entries = parsed.get(name, [])
+    if label_filter:
+        entries = [e for e in entries if all(e['labels'].get(k) == v for k, v in label_filter.items())]
+    return sum(e['value'] for e in entries)
 
 
 def _prom_histogram_p(parsed: dict, base_name: str, percentile: float) -> float:
@@ -916,6 +919,124 @@ def _prom_histogram_p(parsed: dict, base_name: str, percentile: float) -> float:
 _vllm_prev: dict = {}   # inst_id -> {ts, gen_tokens, prompt_tokens}
 _vllm_cache: dict = {}  # inst_id -> {ts, entry}  — cache 5s to avoid hammering
 _VLLM_CACHE_TTL = 5.0   # seconds
+
+
+# ── Helper: get active TCP connections to a vLLM port ─────────────────────────
+# Per-IP tracking state cache
+_vllm_ip_state = {}
+
+
+def _get_vllm_connections(url: str) -> dict:
+    """Return dict with connections list, source_ips, active_connections, and ip_metrics.
+
+    Uses conntrack to see original client IPs before Docker DNAT,
+    plus nginx access logs to count per-IP requests.
+    """
+    try:
+        import re
+        import subprocess
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        target_port = parsed.port or 80
+        inst_id = str(parsed.port)
+
+        conns = []
+
+        # 1) Use conntrack to get original client IPs (pre-DNAT)
+        try:
+            result = subprocess.run(
+                ['sudo', 'conntrack', '-L', '-p', 'tcp'],
+                capture_output=True, text=True, timeout=10,
+            )
+            seen = set()
+            for line in result.stdout.splitlines():
+                dport_m = re.search(r'dport=(\d+)', line)
+                if not dport_m or dport_m.group(1) != str(target_port):
+                    continue
+                parts = line.split()
+                src_ip = None
+                src_port = None
+                state = None
+                for p in parts:
+                    if p.startswith('src=') and src_ip is None:
+                        src_ip = p.split('=')[1]
+                    elif p.startswith('sport=') and src_port is None:
+                        src_port = p.split('=')[1]
+                    elif p.startswith('['):
+                        continue
+                    elif p not in ('tcp', '6') and state is None:
+                        state = p
+                if src_ip and src_ip not in seen:
+                    seen.add(src_ip)
+                    conns.append({
+                        'ip': src_ip,
+                        'port': int(src_port) if src_port else 0,
+                        'status': state or 'TRACKED',
+                    })
+        except Exception:
+            pass
+
+        # 2) Count per-IP requests from nginx access log (3050 only has nginx)
+        nginx_log = f'/var/log/nginx/vllm.access.log' if target_port == 3050 else None
+        ip_requests = {}
+        if nginx_log:
+            try:
+                ip_re = re.compile(r'^(\d+\.\d+\.\d+\.\d+)\s')
+                for path in [nginx_log, nginx_log + '.1']:
+                    try:
+                        with open(path) as f:
+                            for line in f:
+                                ip_m = ip_re.match(line)
+                                if not ip_m:
+                                    continue
+                                ip = ip_m.group(1)
+                                if ip not in ip_requests:
+                                    ip_requests[ip] = {'total': 0, 'chat_posts': 0, 'completed': 0}
+                                ip_requests[ip]['total'] += 1
+                                if 'POST /v1/chat/completions' in line:
+                                    ip_requests[ip]['chat_posts'] += 1
+                                    if re.search(r'" \d+ ', line):
+                                        ip_requests[ip]['completed'] += 1
+                    except (FileNotFoundError, PermissionError):
+                        pass
+            except Exception:
+                pass
+
+        # 3) Build per-IP metrics
+        conn_ips = {c['ip'] for c in conns}
+        for ip in ip_requests:
+            if ip not in conn_ips:
+                conns.append({'ip': ip, 'port': target_port, 'status': 'LOG_SEEN'})
+                conn_ips.add(ip)
+
+        total_posts = max(sum(r['chat_posts'] for r in ip_requests.values()), 1)
+        ip_metrics = []
+        for ip in set(conn_ips):
+            reqs = ip_requests.get(ip, {'total': 0, 'chat_posts': 0, 'completed': 0})
+            ip_metrics.append({
+                'ip': ip,
+                'active': ip in conn_ips and any(c['status'] != 'LOG_SEEN' and c['ip'] == ip for c in conns),
+                'requests': reqs['chat_posts'],
+                'completed': reqs['completed'],
+                'total_seen': reqs['total'],
+                'share': round(reqs['chat_posts'] / total_posts * 100, 1),
+            })
+
+        return {
+            'connections': conns,
+            'active_connections': len(conns),
+            'source_ips': conns,
+            'ip_metrics': ip_metrics,
+            'total_requests': sum(r['chat_posts'] for r in ip_requests.values()),
+        }
+    except Exception:
+        return {
+            'connections': [],
+            'active_connections': 0,
+            'source_ips': [],
+            'ip_metrics': [],
+            'total_requests': 0,
+        }
 
 
 # ── vLLM metrics (for WebSocket snapshot) ────────────────────────────────────
@@ -969,6 +1090,21 @@ def collect_vllm_metrics() -> list:
                 num_running = _prom_scalar(parsed, 'vllm:num_requests_running')
                 num_waiting = _prom_scalar(parsed, 'vllm:num_requests_waiting')
                 req_success = _prom_sum(parsed, 'vllm:request_success_total')
+
+                # ── Request breakdown by reason ───────────────────────────────
+                req_by_reason = {}
+                for reason in ['stop', 'length', 'abort', 'error', 'repetition']:
+                    val = _prom_sum(parsed, 'vllm:request_success_total', label_filter={'finished_reason': reason})
+                    req_by_reason[reason] = int(val)
+
+                # ── Active connections (source IPs) ───────────────────────────
+                tracking_data = _get_vllm_connections(inst['url'])
+                entry['tracking'] = {
+                    'active_connections': tracking_data['active_connections'],
+                    'source_ips': tracking_data['source_ips'],
+                    'requests_by_reason': req_by_reason,
+                    'ip_metrics': tracking_data.get('ip_metrics', []),
+                }
 
                 # ── KV cache ──────────────────────────────────────────────────
                 kv_cache_pct = _prom_scalar(parsed, 'vllm:kv_cache_usage_perc') * 100
